@@ -56,7 +56,7 @@ int main() {
       execute_statement(*statement);
       std::cout << "Executed.\n";
     } else {
-      std::cout << "Inrecognized keyword at start of '" << input << "'.\n";
+      std::cout << "Unrecognized keyword at start of '" << input << "'.\n";
     }
   }
 }
