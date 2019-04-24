@@ -18,14 +18,21 @@ struct Statement {
   StatementType statement_type;
 };
 
-std::optional<Statement> prepare_statement(const std::string &input) {
+enum class PrepareResult {
+  SUCCESS,
+  UNRECOGNIZED_STATEMENT
+};
+
+PrepareResult prepare_statement(const std::string &input, Statement &out_statement) {
   if (input.substr(0, 6) == "insert") {
-    return Statement{Statement::INSERT};
+    out_statement = Statement{Statement::INSERT};
+    return PrepareResult::SUCCESS;
   }
   if (input.substr(0, 6) == "select") {
-    return Statement{Statement::SELECT};
+    out_statement = Statement{Statement::SELECT};
+    return PrepareResult::SUCCESS;
   }
-  return std::nullopt;
+  return PrepareResult::UNRECOGNIZED_STATEMENT;
 }
 
 void execute_statement(const Statement &statement) {
@@ -51,12 +58,16 @@ int main() {
         continue;
       }
     }
-    auto statement = prepare_statement(input);
-    if (statement) {
-      execute_statement(*statement);
-      std::cout << "Executed.\n";
-    } else {
-      std::cout << "Unrecognized keyword at start of '" << input << "'.\n";
+    Statement statement{};
+    switch (prepare_statement(input, statement)) {
+      case(PrepareResult::SUCCESS):
+        break;
+      case(PrepareResult::UNRECOGNIZED_STATEMENT):
+        std::cout << "Unrecognized keyword at start of '" << input << "'.\n";
+        continue;
     }
+
+    execute_statement(statement);
+    std::cout << "Executed.\n";
   }
 }
