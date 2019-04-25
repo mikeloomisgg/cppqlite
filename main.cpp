@@ -51,47 +51,35 @@ const uint32_t TABLE_MAX_PAGES = 100;
 const uint32_t ROWS_PER_PAGE = PAGE_SIZE / ROW_SIZE;
 const uint32_t TABLE_MAX_ROWS = ROWS_PER_PAGE * TABLE_MAX_PAGES;
 
+using Page = std::array<uint8_t, PAGE_SIZE>;
+
 struct Table {
   uint32_t num_rows;
-  std::array<void *, TABLE_MAX_PAGES> pages;
-
-  Table() : num_rows(0), pages() {
-    std::fill(pages.begin(), pages.end(), nullptr);
-  }
-
-  ~Table() {
-    for (auto page_ptr : pages) {
-      free(page_ptr);
-    }
-  }
+  std::array<Page, TABLE_MAX_PAGES> pages;
 };
 
 void print_row(const Row &row) {
   std::cout << "(" << row.id << ", " << row.username << ", " << row.email << ")\n";
 }
 
-void serialize_row(const Row &source, void *destination) {
-  memcpy((char *) destination + ID_OFFSET, &source.id, ID_SIZE);
-  memcpy((char *) destination + USERNAME_OFFSET, &source.username, USERNAME_SIZE);
-  memcpy((char *) destination + EMAIL_OFFSET, &source.email, EMAIL_SIZE);
+void serialize_row(const Row &source, uint8_t *destination) {
+  memcpy(destination + ID_OFFSET, &source.id, ID_SIZE);
+  memcpy(destination + USERNAME_OFFSET, &source.username, USERNAME_SIZE);
+  memcpy(destination + EMAIL_OFFSET, &source.email, EMAIL_SIZE);
 }
 
-void deserialize_row(void *source, Row &destination) {
-  memcpy(&destination.id, (char *) source + ID_OFFSET, ID_SIZE);
-  memcpy(&destination.username, (char *) source + USERNAME_OFFSET, USERNAME_SIZE);
-  memcpy(&destination.email, (char *) source + EMAIL_OFFSET, EMAIL_SIZE);
+void deserialize_row(uint8_t *source, Row &destination) {
+  memcpy(&destination.id, source + ID_OFFSET, ID_SIZE);
+  memcpy(&destination.username, source + USERNAME_OFFSET, USERNAME_SIZE);
+  memcpy(&destination.email, source + EMAIL_OFFSET, EMAIL_SIZE);
 }
 
-void *row_slot(Table &table, const uint32_t row_num) {
+uint8_t *row_slot(Table &table, const uint32_t row_num) {
   const uint32_t page_num = row_num / ROWS_PER_PAGE;
-  void *page = table.pages[page_num];
-  if (!page) {
-    // Allocate memory only when we try to access page
-    page = table.pages[page_num] = malloc(PAGE_SIZE);
-  }
+  auto &page = table.pages[page_num];
   uint32_t row_offset = row_num % ROWS_PER_PAGE;
   uint32_t byte_offset = row_offset * ROW_SIZE;
-  return (char *) page + byte_offset;
+  return page.data() + byte_offset;
 }
 
 MetaCommandResult do_meta_command(const std::string &command, Table &table) {
