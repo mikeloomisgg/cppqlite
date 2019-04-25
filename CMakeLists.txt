@@ -3,4 +3,6 @@ project(cppqlite)
 
 set(CMAKE_CXX_STANDARD 17)
 
-add_executable(cppqlite main.cpp)
+add_executable(cppqlite main.cpp db.cpp)
+
+add_subdirectory(tests)
