@@ -25,8 +25,8 @@ struct Row {
   static const std::size_t COLUMN_EMAIL_SIZE = 255;
 
   uint32_t id;
-  char username[COLUMN_USERNAME_SIZE];
-  char email[COLUMN_EMAIL_SIZE];
+  std::array<char, COLUMN_USERNAME_SIZE> username;
+  std::array<char, COLUMN_EMAIL_SIZE> email;
 };
 
 struct Statement {
@@ -51,7 +51,7 @@ const uint32_t TABLE_MAX_PAGES = 100;
 const uint32_t ROWS_PER_PAGE = PAGE_SIZE / ROW_SIZE;
 const uint32_t TABLE_MAX_ROWS = ROWS_PER_PAGE * TABLE_MAX_PAGES;
 
-using Page = std::array<uint8_t, PAGE_SIZE>;
+using Page = std::array<char, PAGE_SIZE>;
 
 struct Table {
   uint32_t num_rows;
@@ -59,22 +59,22 @@ struct Table {
 };
 
 void print_row(const Row &row) {
-  std::cout << "(" << row.id << ", " << row.username << ", " << row.email << ")\n";
+  std::cout << "(" << row.id << ", " << row.username.data() << ", " << row.email.data() << ")\n";
 }
 
-void serialize_row(const Row &source, uint8_t *destination) {
+void serialize_row(const Row &source, char *destination) {
   memcpy(destination + ID_OFFSET, &source.id, ID_SIZE);
-  memcpy(destination + USERNAME_OFFSET, &source.username, USERNAME_SIZE);
-  memcpy(destination + EMAIL_OFFSET, &source.email, EMAIL_SIZE);
+  memcpy(destination + USERNAME_OFFSET, source.username.data(), USERNAME_SIZE);
+  memcpy(destination + EMAIL_OFFSET, source.email.data(), EMAIL_SIZE);
 }
 
-void deserialize_row(uint8_t *source, Row &destination) {
-  memcpy(&destination.id, source + ID_OFFSET, ID_SIZE);
-  memcpy(&destination.username, source + USERNAME_OFFSET, USERNAME_SIZE);
-  memcpy(&destination.email, source + EMAIL_OFFSET, EMAIL_SIZE);
+void deserialize_row(const char *source, Row &destination) {
+  destination.id = *(uint32_t *) (source + ID_OFFSET);
+  destination.username = *(std::array<char, USERNAME_SIZE> *)(source + USERNAME_OFFSET);
+  destination.email = *(std::array<char, EMAIL_SIZE> *)(source + EMAIL_OFFSET);
 }
 
-uint8_t *row_slot(Table &table, const uint32_t row_num) {
+char *row_slot(Table &table, const uint32_t row_num) {
   const uint32_t page_num = row_num / ROWS_PER_PAGE;
   auto &page = table.pages[page_num];
   uint32_t row_offset = row_num % ROWS_PER_PAGE;
@@ -95,7 +95,8 @@ PrepareResult prepare_statement(const std::string &input, Statement &out_stateme
     out_statement = Statement{Statement::INSERT};
     int args_assigned = sscanf_s(
         input.data(), "insert %d %s %s", &(out_statement.row_to_insert.id),
-        out_statement.row_to_insert.username, USERNAME_SIZE, out_statement.row_to_insert.email, EMAIL_SIZE
+        out_statement.row_to_insert.username.data(), USERNAME_SIZE,
+        out_statement.row_to_insert.email.data(), EMAIL_SIZE
     );
     if (args_assigned < 3) {
       return PrepareResult::SYNTAX_ERROR;
