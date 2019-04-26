@@ -106,7 +106,7 @@ TEST_CASE("Data in table persists after reinitializing table") {
     REQUIRE(std::string(selected_rows[0].email.data()) == "test@email.com");
     db_close(table);
   }
-  {
+  for (auto i = 0; i < 10; ++i) {
     Table table{"test.db"};
     Statement statement{};
     REQUIRE(prepare_statement("select", statement) == PrepareResult::SUCCESS);
