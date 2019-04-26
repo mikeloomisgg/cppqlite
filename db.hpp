@@ -86,13 +86,24 @@ struct Table {
   explicit Table(const std::string &filename);
 };
 
+struct Cursor {
+  Table &table;
+  std::size_t row_num;
+  bool end_of_table;
+
+  void advance();
+  char* value();
+};
+
 void print_row(const Row &row);
 
 void serialize_row(const Row &source, char *destination);
 
 void deserialize_row(const char *source, Row &destination);
 
-char *row_slot(Table &table, std::size_t row_num);
+Cursor table_start(Table &table);
+
+Cursor table_end(Table &table);
 
 void db_close(Table &table);
 
