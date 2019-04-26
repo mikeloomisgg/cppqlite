@@ -1,7 +1,14 @@
 #include "db.hpp"
 
-int main() {
-  Table table{};
+int main(int argc, char* argv[]) {
+  if(argc < 2) {
+    std::cerr << "Must supply a database filename.\n";
+    exit(EXIT_FAILURE);
+  }
+
+  std::string filename = argv[1];
+  Table table{filename};
+
   std::string input;
   while (true) {
     std::cout << "db > ";

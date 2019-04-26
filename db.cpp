@@ -23,16 +23,35 @@ void deserialize_row(const char *source, Row &destination) {
   destination.email = *(std::array<char, EMAIL_SIZE> *) (source + EMAIL_OFFSET);
 }
 
-char *row_slot(Table &table, const uint32_t row_num) {
-  const uint32_t page_num = row_num / ROWS_PER_PAGE;
-  auto &page = table.pages[page_num];
+char *row_slot(Table &table, const std::size_t row_num) {
+  const std::size_t page_num = row_num / ROWS_PER_PAGE;
+  auto &page = table.pager.get_page(page_num);
   uint32_t row_offset = row_num % ROWS_PER_PAGE;
   uint32_t byte_offset = row_offset * ROW_SIZE;
-  return page.data() + byte_offset;
+  return page.data.data() + byte_offset;
+}
+
+void db_close(Table &table) {
+  std::size_t num_full_pages = table.num_rows / ROWS_PER_PAGE;
+  for (std::size_t i = 0; i < num_full_pages; ++i) {
+    if (table.pager.pages[i].cached) {
+      table.pager.flush(i, PAGE_SIZE);
+    }
+  }
+  std::size_t num_additional_rows = table.num_rows % ROWS_PER_PAGE;
+  if (num_additional_rows > 0) {
+    auto page_num = num_full_pages;
+    if (table.pager.pages[page_num].cached) {
+      table.pager.flush(page_num, num_additional_rows * ROW_SIZE);
+    }
+  }
+
+  table.pager.file.close();
 }
 
 MetaCommandResult do_meta_command(const std::string &command, Table &table) {
   if (command == ".exit") {
+    db_close(table);
     exit(EXIT_SUCCESS);
   } else {
     return MetaCommandResult::UNRECOGNIZED_COMMAND;
@@ -59,7 +78,7 @@ bool is_number(const std::string &s) {
 
 PrepareResult prepare_statement(const std::string &input, Statement &out_statement) {
   std::vector<std::string> tokens = tokenize(input, " ");
-  if(tokens.empty()) {
+  if (tokens.empty()) {
     return PrepareResult::UNRECOGNIZED_STATEMENT;
   }
   if (tokens[0] == "insert") {
@@ -71,7 +90,7 @@ PrepareResult prepare_statement(const std::string &input, Statement &out_stateme
     if (id < 0) {
       return PrepareResult::NEGATIVE_ID;
     }
-    if(!is_number(tokens[1])) {
+    if (!is_number(tokens[1])) {
       return PrepareResult::SYNTAX_ERROR;
     }
     if (tokens[2].size() >= USERNAME_SIZE || tokens[3].size() >= EMAIL_SIZE) {
@@ -97,7 +116,7 @@ ExecuteResult execute_insert(const Statement &statement, Table &table) {
 
   const Row &row_to_insert = statement.row_to_insert;
   serialize_row(row_to_insert, row_slot(table, table.num_rows));
-  table.num_rows += 1;
+  table.num_rows++;
 
   return ExecuteResult::SUCCESS;
 }
