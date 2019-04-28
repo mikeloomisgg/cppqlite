@@ -34,27 +34,6 @@ TEST_CASE("Prepare statement catches syntax errors and unrecognized keywords") {
   REQUIRE(prepare_statement("insert 1 " + username + " " + email, statement) == PrepareResult::STRING_TOO_LONG);
 }
 
-TEST_CASE("Execute_insert returns table full or succeeds if row fits") {
-  std::remove("test.db");
-  Table table{"test.db"};
-  Statement statement{};
-  REQUIRE(prepare_statement("insert 1 test test@email.com", statement) == PrepareResult::SUCCESS);
-  REQUIRE(execute_insert(statement, table) == ExecuteResult::SUCCESS);
-
-  Table fill_this_table{"filldb.db"};
-  ExecuteResult last_execute = ExecuteResult::UNHANDLED_STATEMENT;
-  for (auto i = 0; i < TABLE_MAX_ROWS; ++i) {
-    char buffer[50];
-    sprintf_s(buffer, "insert %d user#%d person#%d@example.com", i, i, i);
-    prepare_statement(buffer, statement);
-    last_execute = execute_insert(statement, fill_this_table);
-  }
-  REQUIRE(last_execute == ExecuteResult::SUCCESS);
-  REQUIRE(execute_insert(statement, fill_this_table) == ExecuteResult::TABLE_FULL);
-  db_close(fill_this_table);
-  std::remove("filldb.db");
-}
-
 TEST_CASE("Execute_select gives all inserted rows and correct return codes") {
   std::remove("test.db");
   Table table{"test.db"};
@@ -70,6 +49,27 @@ TEST_CASE("Execute_select gives all inserted rows and correct return codes") {
   REQUIRE(std::string(selected_rows[0].username.data()) == "test");
   REQUIRE(std::string(selected_rows[0].email.data()) == "test@email.com");
   std::remove("test.db");
+}
+
+TEST_CASE("Execute_insert returns table full or succeeds if row fits") {
+  std::remove("test.db");
+  Table table{"test.db"};
+  Statement statement{};
+  REQUIRE(prepare_statement("insert 1 test test@email.com", statement) == PrepareResult::SUCCESS);
+  REQUIRE(execute_insert(statement, table) == ExecuteResult::SUCCESS);
+
+  Table fill_this_table{"filldb.db"};
+  ExecuteResult last_execute = ExecuteResult::UNHANDLED_STATEMENT;
+  for (auto i = 0; i < LEAF_NODE_MAX_CELLS; ++i) {
+    char buffer[50];
+    sprintf_s(buffer, "insert %d user#%d person#%d@example.com", i, i, i);
+    prepare_statement(buffer, statement);
+    last_execute = execute_insert(statement, fill_this_table);
+  }
+  REQUIRE(last_execute == ExecuteResult::SUCCESS);
+  REQUIRE(execute_insert(statement, fill_this_table) == ExecuteResult::TABLE_FULL);
+  db_close(fill_this_table);
+  std::remove("filldb.db");
 }
 
 TEST_CASE("Table allows inserting strings that are maximum length") {
