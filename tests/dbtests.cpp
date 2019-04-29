@@ -120,3 +120,25 @@ TEST_CASE("Data in table persists after reinitializing table") {
   }
   std::remove("test.db");
 }
+
+TEST_CASE("Inserted data comes out of select statement sorted") {
+  std::remove("test.db");
+  Table table{"test.db"};
+  Statement statement{};
+  REQUIRE(prepare_statement("insert 3 test test@email.com", statement) == PrepareResult::SUCCESS);
+  REQUIRE(execute_insert(statement, table) == ExecuteResult::SUCCESS);
+  REQUIRE(prepare_statement("insert 1 test test@email.com", statement) == PrepareResult::SUCCESS);
+  REQUIRE(execute_insert(statement, table) == ExecuteResult::SUCCESS);
+  REQUIRE(prepare_statement("insert 2 test test@email.com", statement) == PrepareResult::SUCCESS);
+  REQUIRE(execute_insert(statement, table) == ExecuteResult::SUCCESS);
+
+  REQUIRE(prepare_statement("select", statement) == PrepareResult::SUCCESS);
+  std::vector<Row> selected_rows;
+  REQUIRE(execute_select(statement, table, selected_rows) == ExecuteResult::SUCCESS);
+  REQUIRE(selected_rows.size() == 3);
+  REQUIRE(selected_rows[0].id == 1);
+  REQUIRE(selected_rows[1].id == 2);
+  REQUIRE(selected_rows[2].id == 3);
+
+  std::remove("test.db");
+}

@@ -14,6 +14,7 @@
 
 enum class ExecuteResult {
   SUCCESS,
+  DUPLICATE_KEY,
   TABLE_FULL,
   UNHANDLED_STATEMENT
 };
@@ -61,8 +62,22 @@ const uint32_t PAGE_SIZE = 4096;
 const uint32_t TABLE_MAX_PAGES = 100;
 
 struct Page {
+  enum class NodeType {
+    INTERNAL,
+    LEAF
+  };
+
   bool cached;
   std::array<char, PAGE_SIZE> data;
+
+  explicit Page(NodeType type = NodeType::LEAF)
+      : cached(),
+        data() {
+    set_node_type(type);
+  };
+
+  void set_node_type(NodeType type);
+  NodeType get_node_type();
 };
 
 struct Pager {
@@ -83,6 +98,8 @@ struct Table {
   std::size_t root_page_num;
 
   explicit Table(const std::string &filename);
+
+
 };
 
 struct Cursor {
@@ -93,11 +110,6 @@ struct Cursor {
 
   char *value();
   void advance();
-};
-
-enum class NodeType {
-  INTERNAL,
-  LEAF
 };
 
 // Common node header layout
@@ -146,6 +158,8 @@ void deserialize_row(const char *source, Row &destination);
 Cursor table_start(Table &table);
 
 Cursor table_end(Table &table);
+
+Cursor leaf_node_find(Table &table, std::size_t page_num, uint32_t key);
 
 void db_close(Table &table);
 

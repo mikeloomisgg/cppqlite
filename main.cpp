@@ -1,7 +1,7 @@
 #include "db.hpp"
 
-int main(int argc, char* argv[]) {
-  if(argc < 2) {
+int main(int argc, char *argv[]) {
+  if (argc < 2) {
     std::cerr << "Must supply a database filename.\n";
     exit(EXIT_FAILURE);
   }
@@ -44,6 +44,9 @@ int main(int argc, char* argv[]) {
     switch (execute_statement(statement, table)) {
       case (ExecuteResult::SUCCESS):
         std::cout << "Executed.\n";
+        break;
+      case (ExecuteResult::DUPLICATE_KEY):
+        std::cout << "Error: Duplicate key.\n";
         break;
       case (ExecuteResult::TABLE_FULL):
         std::cout << "Error: Table full.\n";
