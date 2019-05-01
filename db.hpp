@@ -35,9 +35,35 @@ struct Row {
   static const std::size_t COLUMN_USERNAME_SIZE = 32;
   static const std::size_t COLUMN_EMAIL_SIZE = 255;
 
+  static constexpr std::size_t row_size() { return id_size() + username_size() + email_size(); };
+
+  static constexpr std::size_t id_size() { return sizeof(id); }
+
+  static constexpr std::size_t id_offset() { return 0; }
+
+  static constexpr std::size_t username_size() { return sizeof(username); }
+
+  static constexpr std::size_t username_offset() { return id_size(); }
+
+  static constexpr std::size_t email_size() { return sizeof(email); }
+
+  static constexpr std::size_t email_offset() { return id_size() + username_size(); }
+
   uint32_t id;
   std::array<char, COLUMN_USERNAME_SIZE + 1> username;
   std::array<char, COLUMN_EMAIL_SIZE + 1> email;
+
+  friend std::ostream &operator<<(std::ostream &out, const Row &s) {
+    out << "(" << s.id << ", " << s.username.data() << ", " << s.email.data() << ")\n";
+    return out;
+  };
+
+  Row() = default;
+  explicit Row(const char *source);
+
+  Row(uint32_t id, std::string username, std::string email);
+
+  void serialize(char *destination) const;
 };
 
 struct Statement {
@@ -50,27 +76,21 @@ struct Statement {
   Row row_to_insert; // only used by insert statement
 };
 
-const uint32_t ID_SIZE = sizeof(Row::id);
-const uint32_t USERNAME_SIZE = sizeof(Row::username);
-const uint32_t EMAIL_SIZE = sizeof(Row::email);
-const uint32_t ID_OFFSET = 0;
-const uint32_t USERNAME_OFFSET = ID_OFFSET + ID_SIZE;
-const uint32_t EMAIL_OFFSET = USERNAME_OFFSET + USERNAME_SIZE;
-const uint32_t ROW_SIZE = ID_SIZE + USERNAME_SIZE + EMAIL_SIZE;
-const uint32_t PAGE_SIZE = 4096;
-const uint32_t TABLE_MAX_PAGES = 100;
-const uint32_t ROWS_PER_PAGE = PAGE_SIZE / ROW_SIZE;
-const uint32_t TABLE_MAX_ROWS = ROWS_PER_PAGE * TABLE_MAX_PAGES;
-
 struct Page {
+  static const uint32_t PAGE_SIZE = 4096;
+
+  static constexpr std::size_t rows_per_page() { return PAGE_SIZE / Row::row_size(); }
+
   bool cached;
   std::array<char, PAGE_SIZE> data;
 };
 
 struct Pager {
+  static const uint32_t MAX_PAGES = 100;
+
   std::fstream file;
   std::size_t file_length;
-  std::array<Page, TABLE_MAX_PAGES> pages;
+  std::array<Page, MAX_PAGES> pages;
 
   explicit Pager(const std::string &filename);
 
@@ -80,23 +100,17 @@ struct Pager {
 };
 
 struct Table {
+  static constexpr std::size_t max_rows() { return Pager::MAX_PAGES * Page::rows_per_page(); }
+
   Pager pager;
   std::size_t num_rows;
 
-  explicit Table(const std::string &filename)
-      : pager(filename),
-        num_rows(pager.file_length / ROW_SIZE) {};
+  explicit Table(const std::string &filename);
 
   char *row_slot(std::size_t row_num);
 
   void db_close();
 };
-
-void print_row(const Row &row);
-
-void serialize_row(const Row &source, char *destination);
-
-void deserialize_row(const char *source, Row &destination);
 
 MetaCommandResult do_meta_command(const std::string &command, Table &table);
 

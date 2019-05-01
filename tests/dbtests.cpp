@@ -6,14 +6,14 @@
 #include "../db.hpp"
 
 TEST_CASE("Serialize/deserialize puts rows into raw memory and back to struct") {
-  char storage[ROW_SIZE];
+  char storage[Row::row_size()];
   Row output_row{};
   {
-    Row row{1, "username", "email"};
-    serialize_row(row, storage);
+    Row row(1, "username", "email");
+    row.serialize(storage);
   }
   {
-    deserialize_row(storage, output_row);
+    output_row = Row(storage);
   }
   REQUIRE(output_row.id == 1);
   REQUIRE(std::string(output_row.username.data()) == "username");
@@ -43,7 +43,7 @@ TEST_CASE("Execute_insert returns table full or succeeds if row fits") {
 
   Table fill_this_table{"filldb.db"};
   ExecuteResult last_execute = ExecuteResult::UNHANDLED_STATEMENT;
-  for (auto i = 0; i < TABLE_MAX_ROWS; ++i) {
+  for (auto i = 0; i < Table::max_rows(); ++i) {
     char buffer[50];
     sprintf_s(buffer, "insert %d user#%d person#%d@example.com", i, i, i);
     prepare_statement(buffer, statement);
