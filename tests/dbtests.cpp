@@ -51,7 +51,7 @@ TEST_CASE("Execute_insert returns table full or succeeds if row fits") {
   }
   REQUIRE(last_execute == ExecuteResult::SUCCESS);
   REQUIRE(execute_insert(statement, fill_this_table) == ExecuteResult::TABLE_FULL);
-  db_close(fill_this_table);
+  fill_this_table.db_close();
   std::remove("filldb.db");
 }
 
@@ -104,7 +104,7 @@ TEST_CASE("Data in table persists after reinitializing table") {
     REQUIRE(selected_rows[0].id == 1);
     REQUIRE(std::string(selected_rows[0].username.data()) == "test");
     REQUIRE(std::string(selected_rows[0].email.data()) == "test@email.com");
-    db_close(table);
+    table.db_close();
   }
   {
     Table table{"test.db"};
@@ -116,7 +116,7 @@ TEST_CASE("Data in table persists after reinitializing table") {
     REQUIRE(selected_rows[0].id == 1);
     REQUIRE(std::string(selected_rows[0].username.data()) == "test");
     REQUIRE(std::string(selected_rows[0].email.data()) == "test@email.com");
-    db_close(table);
+    table.db_close();
   }
   std::remove("test.db");
 }

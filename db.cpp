@@ -23,35 +23,35 @@ void deserialize_row(const char *source, Row &destination) {
   destination.email = *(std::array<char, EMAIL_SIZE> *) (source + EMAIL_OFFSET);
 }
 
-char *row_slot(Table &table, const std::size_t row_num) {
+char *Table::row_slot(const std::size_t row_num) {
   const std::size_t page_num = row_num / ROWS_PER_PAGE;
-  auto &page = table.pager.get_page(page_num);
+  auto &page = pager.get_page(page_num);
   uint32_t row_offset = row_num % ROWS_PER_PAGE;
   uint32_t byte_offset = row_offset * ROW_SIZE;
   return page.data.data() + byte_offset;
 }
 
-void db_close(Table &table) {
-  std::size_t num_full_pages = table.num_rows / ROWS_PER_PAGE;
+void Table::db_close() {
+  std::size_t num_full_pages = num_rows / ROWS_PER_PAGE;
   for (std::size_t i = 0; i < num_full_pages; ++i) {
-    if (table.pager.pages[i].cached) {
-      table.pager.flush(i, PAGE_SIZE);
+    if (pager.pages[i].cached) {
+      pager.flush(i, PAGE_SIZE);
     }
   }
-  std::size_t num_additional_rows = table.num_rows % ROWS_PER_PAGE;
+  std::size_t num_additional_rows = num_rows % ROWS_PER_PAGE;
   if (num_additional_rows > 0) {
     auto page_num = num_full_pages;
-    if (table.pager.pages[page_num].cached) {
-      table.pager.flush(page_num, num_additional_rows * ROW_SIZE);
+    if (pager.pages[page_num].cached) {
+      pager.flush(page_num, num_additional_rows * ROW_SIZE);
     }
   }
 
-  table.pager.file.close();
+  pager.file.close();
 }
 
 MetaCommandResult do_meta_command(const std::string &command, Table &table) {
   if (command == ".exit") {
-    db_close(table);
+    table.db_close();
     exit(EXIT_SUCCESS);
   } else {
     return MetaCommandResult::UNRECOGNIZED_COMMAND;
@@ -115,7 +115,7 @@ ExecuteResult execute_insert(const Statement &statement, Table &table) {
   }
 
   const Row &row_to_insert = statement.row_to_insert;
-  serialize_row(row_to_insert, row_slot(table, table.num_rows));
+  serialize_row(row_to_insert, table.row_slot(table.num_rows));
   table.num_rows++;
 
   return ExecuteResult::SUCCESS;
@@ -124,7 +124,7 @@ ExecuteResult execute_insert(const Statement &statement, Table &table) {
 ExecuteResult execute_select(const Statement &statement, Table &table, std::vector<Row> &out_vec) {
   for (uint32_t i = 0; i < table.num_rows; ++i) {
     Row row{};
-    deserialize_row(row_slot(table, i), row);
+    deserialize_row(table.row_slot(i), row);
     out_vec.emplace_back(row);
   }
   return ExecuteResult::SUCCESS;

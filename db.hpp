@@ -129,6 +129,10 @@ struct Table {
   explicit Table(const std::string &filename)
       : pager(filename),
         num_rows(pager.file_length / ROW_SIZE) {};
+
+  char *row_slot(std::size_t row_num);
+
+  void db_close();
 };
 
 void print_row(const Row &row);
@@ -136,10 +140,6 @@ void print_row(const Row &row);
 void serialize_row(const Row &source, char *destination);
 
 void deserialize_row(const char *source, Row &destination);
-
-char *row_slot(Table &table, std::size_t row_num);
-
-void db_close(Table &table);
 
 MetaCommandResult do_meta_command(const std::string &command, Table &table);
 
