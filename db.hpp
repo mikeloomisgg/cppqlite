@@ -70,14 +70,30 @@ struct Page {
   bool cached;
   std::array<char, PAGE_SIZE> data;
 
-  explicit Page(NodeType type = NodeType::LEAF)
-      : cached(),
-        data() {
-    set_node_type(type);
-  };
+  explicit Page(NodeType type = NodeType::LEAF);
 
-  void set_node_type(NodeType type);
-  NodeType get_node_type();
+  void node_type(NodeType type);
+  NodeType node_type();
+
+  uint32_t *num_cells();
+
+  char *cell(std::size_t cell_num);
+
+  char* value(std::size_t cell_num);
+
+  uint32_t *num_keys();
+
+  char *right_child();
+
+  char *child(uint32_t child_num);
+
+  uint32_t *key(std::size_t key_num);
+
+  uint32_t max_key();
+
+  bool is_root();
+
+  void root(bool is_root);
 };
 
 struct Pager {
@@ -91,6 +107,10 @@ struct Pager {
   Page &get_page(std::size_t page_num);
 
   void flush(std::size_t page_num);
+
+  std::size_t get_unused_page_num();
+
+  void print_tree(uint32_t page_num, uint32_t indentation_level);
 };
 
 struct Table {
@@ -98,8 +118,6 @@ struct Table {
   std::size_t root_page_num;
 
   explicit Table(const std::string &filename);
-
-
 };
 
 struct Cursor {
@@ -134,16 +152,27 @@ const uint32_t LEAF_NODE_VALUE_OFFSET = LEAF_NODE_KEY_OFFSET + LEAF_NODE_KEY_SIZ
 const uint32_t LEAF_NODE_CELL_SIZE = LEAF_NODE_KEY_SIZE + LEAF_NODE_VALUE_SIZE;
 const uint32_t LEAF_NODE_SPACE_FOR_CELLS = PAGE_SIZE - LEAF_NODE_HEADER_SIZE;
 const uint32_t LEAF_NODE_MAX_CELLS = LEAF_NODE_SPACE_FOR_CELLS / LEAF_NODE_CELL_SIZE;
+const uint32_t LEAF_NODE_RIGHT_SPLIT_COUNT = (LEAF_NODE_MAX_CELLS + 1) / 2;
+const uint32_t LEAF_NODE_LEFT_SPLIT_COUNT = LEAF_NODE_MAX_CELLS + 1 - LEAF_NODE_RIGHT_SPLIT_COUNT;
 
-uint32_t *leaf_node_num_cells(Page &page);
+// Internal node header layout
+const uint32_t INTERNAL_NODE_NUM_KEYS_SIZE = sizeof(uint32_t);
+const uint32_t INTERNAL_NODE_NUM_KEYS_OFFSET = COMMON_NODE_HEADER_SIZE;
+const uint32_t INTERNAL_NODE_RIGHT_CHILD_SIZE = sizeof(uint32_t);
+const uint32_t INTERNAL_NODE_RIGHT_CHILD_OFFSET = INTERNAL_NODE_NUM_KEYS_OFFSET + INTERNAL_NODE_NUM_KEYS_SIZE;
+const uint32_t INTERNAL_NODE_HEADER_SIZE = COMMON_NODE_HEADER_SIZE +
+    INTERNAL_NODE_NUM_KEYS_SIZE + INTERNAL_NODE_RIGHT_CHILD_SIZE;
 
-char *leaf_node_cell(Page &page, std::size_t cell_num);
-
-uint32_t *leaf_node_key(Page &page, std::size_t cell_num);
-
-char *leaf_node_value(Page &page, std::size_t cell_num);
+// Internal node body layout
+const uint32_t INTERNAL_NODE_KEY_SIZE = sizeof(uint32_t);
+const uint32_t INTERNAL_NODE_CHILD_SIZE = sizeof(uint32_t);
+const uint32_t INTERNAL_NODE_CELL_SIZE = INTERNAL_NODE_CHILD_SIZE + INTERNAL_NODE_KEY_SIZE;
 
 void leaf_node_insert(Cursor &cursor, uint32_t key, const Row &value);
+
+void leaf_node_split_and_insert(Cursor, uint32_t key, const Row &value);
+
+Cursor leaf_node_find(Table &table, std::size_t page_num, uint32_t key);
 
 void print_constants();
 
@@ -156,10 +185,6 @@ void serialize_row(const Row &source, char *destination);
 void deserialize_row(const char *source, Row &destination);
 
 Cursor table_start(Table &table);
-
-Cursor table_end(Table &table);
-
-Cursor leaf_node_find(Table &table, std::size_t page_num, uint32_t key);
 
 void db_close(Table &table);
 
