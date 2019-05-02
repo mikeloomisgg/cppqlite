@@ -80,12 +80,35 @@ Table::Table(const std::string &filename)
     : pager(filename),
       num_rows(pager.file_length / Row::row_size()) {}
 
+void Cursor::advance() {
+  row_num++;
+  if(row_num >= table.num_rows) {
+    end_of_table = true;
+  }
+}
+
+char *Cursor::value() {
+  const std::size_t page_num = row_num / ROWS_PER_PAGE;
+  auto &page = table.pager.get_page(page_num);
+  uint32_t row_offset = row_num % ROWS_PER_PAGE;
+  uint32_t byte_offset = row_offset * ROW_SIZE;
+  return page.data.data() + byte_offset;
+}
+
 char *Table::row_slot(const std::size_t row_num) {
   const std::size_t page_num = row_num / Page::rows_per_page();
   auto &page = pager.get_page(page_num);
   std::size_t row_offset = row_num % Page::rows_per_page();
   std::size_t byte_offset = row_offset * Row::row_size();
   return page.data.data() + byte_offset;
+}
+
+Cursor table_start(Table &table) {
+  return Cursor{table, 0, table.num_rows == 0};
+}
+
+Cursor table_end(Table &table) {
+  return Cursor{table, table.num_rows, true};
 }
 
 void Table::db_close() {
@@ -172,6 +195,9 @@ ExecuteResult execute_insert(const Statement &statement, Table &table) {
   }
 
   statement.row_to_insert.serialize(table.row_slot(table.num_rows));
+  const Row &row_to_insert = statement.row_to_insert;
+  auto cursor = table_end(table);
+  serialize_row(row_to_insert, cursor.value());
   table.num_rows++;
 
   return ExecuteResult::SUCCESS;
@@ -180,7 +206,12 @@ ExecuteResult execute_insert(const Statement &statement, Table &table) {
 ExecuteResult execute_select(const Statement &statement, Table &table, std::vector<Row> &out_vec) {
   for (uint32_t i = 0; i < table.num_rows; ++i) {
     Row row(table.row_slot(i));
+  auto cursor = table_start(table);
+  while(!cursor.end_of_table) {
+    Row row{};
+    deserialize_row(cursor.value(), row);
     out_vec.emplace_back(row);
+    cursor.advance();
   }
   return ExecuteResult::SUCCESS;
 }

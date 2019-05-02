@@ -108,9 +108,28 @@ struct Table {
   explicit Table(const std::string &filename);
 
   char *row_slot(std::size_t row_num);
+struct Cursor {
+  Table &table;
+  std::size_t row_num;
+  bool end_of_table;
+
+  void advance();
+  char* value();
+};
+
+void print_row(const Row &row);
 
   void db_close();
 };
+void serialize_row(const Row &source, char *destination);
+
+void deserialize_row(const char *source, Row &destination);
+
+Cursor table_start(Table &table);
+
+Cursor table_end(Table &table);
+
+void db_close(Table &table);
 
 MetaCommandResult do_meta_command(const std::string &command, Table &table);
 
