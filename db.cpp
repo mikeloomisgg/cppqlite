@@ -28,7 +28,10 @@ void Row::serialize(char *destination) const {
 }
 
 Pager::Pager(const std::string &filename)
-    : file(filename, std::ios::in | std::ios::out | std::ios::app | std::ios::binary), file_length(), pages() {
+    : file(filename, std::ios::in | std::ios::out | std::ios::app | std::ios::binary),
+      file_length(),
+      num_pages(),
+      pages() {
   file.close();
   file.open(filename, std::ios::in | std::ios::out | std::ios::binary);
   if (!file) {
@@ -47,9 +50,7 @@ Page &Pager::get_page(std::size_t page_num) {
   }
 
   if (!pages[page_num].cached) {
-    std::size_t num_pages = file_length / Page::PAGE_SIZE;
-
-    if (file_length % Page::PAGE_SIZE) {
+    if (page_num >= num_pages) {
       num_pages++;
     }
     if (page_num <= num_pages) {
@@ -64,7 +65,7 @@ Page &Pager::get_page(std::size_t page_num) {
   return pages[page_num];
 }
 
-void Pager::flush(std::size_t page_num, std::size_t size) {
+void Pager::flush(std::size_t page_num) {
   if (!pages[page_num].cached) {
     std::cerr << "Tried to flush uncached page\n";
     exit(EXIT_FAILURE);
@@ -72,49 +73,47 @@ void Pager::flush(std::size_t page_num, std::size_t size) {
 
   file.seekg(page_num * Page::PAGE_SIZE, std::fstream::beg);
 
-  file.write(pages[page_num].data.data(), size);
+  file.write(pages[page_num].data.data(), Page::PAGE_SIZE);
   pages[page_num].cached = false;
 }
 
 Table::Table(const std::string &filename)
     : pager(filename),
-      num_rows(pager.file_length / Row::row_size()) {}
+      root_page_num(0) {
+}
+
+char *Table::Cursor::value() {
+  auto &page = table.pager.get_page(page_num);
+  return leaf_node_value(page, cell_num);
+}
 
 void Table::Cursor::advance() {
-  row_num++;
-  if (row_num >= table.num_rows) {
+  auto node = table.pager.get_page(page_num);
+  cell_num++;
+  if (cell_num >= *leaf_node_num_cells(node)) {
     end_of_table = true;
   }
 }
 
-char *Table::Cursor::value() {
-  const std::size_t page_num = row_num / Page::rows_per_page();
-  auto &page = table.pager.get_page(page_num);
-  std::size_t row_offset = row_num % Page::rows_per_page();
-  std::size_t byte_offset = row_offset * Row::row_size();
-  return page.data.data() + byte_offset;
-}
-
 Table::Cursor Table::table_start() {
-  return Cursor{*this, 0, num_rows == 0};
+  auto page_num = root_page_num;
+  auto cell_num = 0U;
+  auto root_node = pager.get_page(root_page_num);
+  auto end_of_table = *leaf_node_num_cells(root_node) == 0;
+  return Cursor{*this, page_num, cell_num, end_of_table};
 }
 
 Table::Cursor Table::table_end() {
-  return Cursor{*this, num_rows, true};
+  auto page_num = root_page_num;
+  auto root_node = pager.get_page(root_page_num);
+  auto cell_num = *leaf_node_num_cells(root_node);
+  return Cursor{*this, page_num, cell_num, true};
 }
 
 void Table::db_close() {
-  std::size_t num_full_pages = num_rows / Page::rows_per_page();
-  for (std::size_t i = 0; i < num_full_pages; ++i) {
+  for (std::size_t i = 0; i < pager.num_pages; i++) {
     if (pager.pages[i].cached) {
-      pager.flush(i, Page::PAGE_SIZE);
-    }
-  }
-  std::size_t num_additional_rows = num_rows % Page::rows_per_page();
-  if (num_additional_rows > 0) {
-    auto page_num = num_full_pages;
-    if (pager.pages[page_num].cached) {
-      pager.flush(page_num, num_additional_rows * Row::row_size());
+      pager.flush(i);
     }
   }
 
@@ -125,6 +124,14 @@ MetaCommandResult do_meta_command(const std::string &command, Table &table) {
   if (command == ".exit") {
     table.db_close();
     exit(EXIT_SUCCESS);
+  } else if (command == ".btree") {
+    std::cout << "Tree:\n";
+    print_leaf_node(table.pager.get_page(0));
+    return MetaCommandResult::SUCCESS;
+  } else if (command == ".constants") {
+    std::cout << "Constants:\n";
+    print_constants();
+    return MetaCommandResult::SUCCESS;
   } else {
     return MetaCommandResult::UNRECOGNIZED_COMMAND;
   }
@@ -146,6 +153,27 @@ std::vector<std::string> tokenize(const std::string &str, const std::string &del
 
 bool is_number(const std::string &s) {
   return !s.empty() && std::find_if(s.begin(), s.end(), [](char c) { return !std::isdigit(c); }) == s.end();
+}
+
+void leaf_node_insert(Table::Cursor &cursor, uint32_t key, const Row &value) {
+  auto &node = cursor.table.pager.get_page(cursor.page_num);
+
+  auto num_cells = *leaf_node_num_cells(node);
+  if (num_cells >= LEAF_NODE_MAX_CELLS) {
+    std::cerr << "Need to implement splitting a leaf node.\n";
+    exit(EXIT_FAILURE);
+  }
+
+  if (cursor.cell_num < num_cells) {
+    // Make room for new cell
+    for (auto i = num_cells; i > cursor.cell_num; i--) {
+      memcpy(leaf_node_cell(node, i), leaf_node_cell(node, i - 1), LEAF_NODE_CELL_SIZE);
+    }
+  }
+
+  *leaf_node_num_cells(node) += 1;
+  *leaf_node_key(node, cursor.cell_num) = key;
+  serialize_row(value, leaf_node_value(node, cursor.cell_num));
 }
 
 PrepareResult prepare_statement(const std::string &input, Statement &out_statement) {
@@ -182,13 +210,14 @@ PrepareResult prepare_statement(const std::string &input, Statement &out_stateme
 }
 
 ExecuteResult execute_insert(const Statement &statement, Table &table) {
-  if (table.num_rows >= Table::max_rows()) {
+  auto &node = table.pager.get_page(table.root_page_num);
+  if (*leaf_node_num_cells(node) >= LEAF_NODE_MAX_CELLS) {
     return ExecuteResult::TABLE_FULL;
   }
 
   auto cursor = table.table_end();
-  statement.row_to_insert.serialize(cursor.value());
-  table.num_rows++;
+  const Row &row_to_insert = statement.row_to_insert;
+  leaf_node_insert(cursor, row_to_insert.id, row_to_insert);
 
   return ExecuteResult::SUCCESS;
 }
@@ -216,4 +245,38 @@ ExecuteResult execute_statement(const Statement &statement, Table &table) {
       return result;
   }
   return ExecuteResult::UNHANDLED_STATEMENT;
+}
+
+uint32_t *leaf_node_num_cells(Page &page) {
+  return (uint32_t *) (page.data.data() + LEAF_NODE_NUM_CELLS_OFFSET);
+}
+
+char *leaf_node_cell(Page &page, std::size_t cell_num) {
+  return page.data.data() + LEAF_NODE_HEADER_SIZE + cell_num * LEAF_NODE_CELL_SIZE;
+}
+
+uint32_t *leaf_node_key(Page &page, std::size_t cell_num) {
+  return (uint32_t *) leaf_node_cell(page, cell_num);
+}
+
+char *leaf_node_value(Page &page, std::size_t cell_num) {
+  return leaf_node_cell(page, cell_num) + LEAF_NODE_KEY_SIZE;
+}
+
+void print_constants() {
+  std::cout << "ROW_SIZE: " << Row::row_size() << '\n';
+  std::cout << "COMMON_NODE_HEADER_SIZE: " << COMMON_NODE_HEADER_SIZE << '\n';
+  std::cout << "LEAF_NODE_HEADER_SIZE: " << LEAF_NODE_HEADER_SIZE << '\n';
+  std::cout << "LEAF_NODE_CELL_SIZE: " << LEAF_NODE_CELL_SIZE << '\n';
+  std::cout << "LEAF_NODE_SPACE_FOR_CELLS: " << LEAF_NODE_SPACE_FOR_CELLS << '\n';
+  std::cout << "LEAF_NODE_MAX_CELLS: " << LEAF_NODE_MAX_CELLS << '\n';
+}
+
+void print_leaf_node(Page &page) {
+  auto num_cells = *leaf_node_num_cells(page);
+  std::cout << "leaf (size " << num_cells << ")\n";
+  for (auto i = 0U; i < num_cells; ++i) {
+    auto key = *leaf_node_key(page, i);
+    std::cout << "  - " << i << " : " << key << '\n';
+  }
 }
