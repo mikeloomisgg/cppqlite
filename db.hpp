@@ -35,26 +35,20 @@ struct Row {
   static const std::size_t COLUMN_USERNAME_SIZE = 32;
   static const std::size_t COLUMN_EMAIL_SIZE = 255;
 
-  static constexpr std::size_t row_size() { return id_size() + username_size() + email_size(); };
-
-  static constexpr std::size_t id_size() { return sizeof(id); }
-
-  static constexpr std::size_t id_offset() { return 0; }
-
-  static constexpr std::size_t username_size() { return sizeof(username); }
-
-  static constexpr std::size_t username_offset() { return id_size(); }
-
-  static constexpr std::size_t email_size() { return sizeof(email); }
-
-  static constexpr std::size_t email_offset() { return id_size() + username_size(); }
-
   uint32_t id;
   std::array<char, COLUMN_USERNAME_SIZE + 1> username;
   std::array<char, COLUMN_EMAIL_SIZE + 1> email;
 
+  static const std::size_t id_size = sizeof(id);
+  static const std::size_t id_offset = 0;
+  static const std::size_t username_size = sizeof(username);
+  static const std::size_t username_offset = id_size;
+  static const std::size_t email_size = sizeof(email);
+  static const std::size_t email_offset = id_size + username_size;
+  static const std::size_t row_size = id_size + username_size + email_size;
+
   friend std::ostream &operator<<(std::ostream &out, const Row &s) {
-    out << "(" << s.id << ", " << s.username.data() << ", " << s.email.data() << ")\n";
+    out << "(" << s.id << ", " << s.username.data() << ", " << s.email.data() << ")";
     return out;
   };
 
@@ -76,37 +70,76 @@ struct Statement {
   Row row_to_insert; // only used by insert statement
 };
 
-const uint32_t NODE_TYPE_SIZE = sizeof(uint8_t);
-const uint32_t NODE_TYPE_OFFSET = 0;
-const uint32_t IS_ROOT_SIZE = sizeof(uint8_t);
-const uint32_t IS_ROOT_OFFSET = NODE_TYPE_SIZE;
-const uint32_t PARENT_POINTER_SIZE = sizeof(uint32_t);
-const uint32_t PARENT_POINTER_OFFSET = IS_ROOT_OFFSET + IS_ROOT_SIZE;
-const uint32_t COMMON_NODE_HEADER_SIZE = NODE_TYPE_SIZE + IS_ROOT_SIZE + PARENT_POINTER_SIZE;
-
-// Leaf node header layout
-const uint32_t LEAF_NODE_NUM_CELLS_SIZE = sizeof(uint32_t);
-const uint32_t LEAF_NODE_NUM_CELLS_OFFSET = COMMON_NODE_HEADER_SIZE;
-const uint32_t LEAF_NODE_HEADER_SIZE = COMMON_NODE_HEADER_SIZE + LEAF_NODE_NUM_CELLS_SIZE;
-
-// Leaf node body layout
-const uint32_t LEAF_NODE_KEY_SIZE = sizeof(uint32_t);
-const uint32_t LEAF_NODE_KEY_OFFSET = 0;
-const uint32_t LEAF_NODE_VALUE_SIZE = Row::row_size();
-const uint32_t LEAF_NODE_VALUE_OFFSET = LEAF_NODE_KEY_OFFSET + LEAF_NODE_KEY_SIZE;
-const uint32_t LEAF_NODE_CELL_SIZE = LEAF_NODE_KEY_SIZE + LEAF_NODE_VALUE_SIZE;
-const uint32_t LEAF_NODE_SPACE_FOR_CELLS = Page::PAGE_SIZE - LEAF_NODE_HEADER_SIZE;
-const uint32_t LEAF_NODE_MAX_CELLS = LEAF_NODE_SPACE_FOR_CELLS / LEAF_NODE_CELL_SIZE;
-
 struct Page {
-  enum class NodeType {
-    INTERNAL,
-    LEAF
-  };
-
   static const uint32_t PAGE_SIZE = 4096;
 
-  static constexpr std::size_t rows_per_page() { return PAGE_SIZE / Row::row_size(); }
+  struct CommonHeader {
+    enum class NodeType : uint8_t {
+      INTERNAL,
+      LEAF
+    };
+    NodeType node_type;
+    bool is_root;
+    Page *parent;
+
+    static const std::size_t node_type_size = sizeof(node_type);
+    static const std::size_t is_root_size = sizeof(is_root);
+    static const std::size_t parent_pointer_size = sizeof(parent);
+    static const std::size_t size = node_type_size + is_root_size + parent_pointer_size;
+
+    CommonHeader();
+    explicit CommonHeader(const Page &page);
+  };
+
+  struct LeafHeader {
+    CommonHeader common_header;
+    uint32_t num_cells;
+
+    static const std::size_t num_cells_size = sizeof(num_cells);
+    static const std::size_t size = CommonHeader::size + num_cells_size;
+
+    LeafHeader();
+    explicit LeafHeader(const Page &page);
+  };
+
+  struct LeafCell {
+    uint32_t key;
+    Row value;
+
+    static const std::size_t key_size = sizeof(key);
+    static const std::size_t value_size = Row::row_size;
+    static const std::size_t cell_size = key_size + value_size;
+  };
+
+  struct LeafBody {
+    static const std::size_t space_for_cells = Page::PAGE_SIZE - LeafHeader::size;
+    static const std::size_t max_cells = space_for_cells / LeafCell::cell_size;
+
+    std::array<LeafCell, max_cells> cells;
+    
+    LeafBody();
+    explicit LeafBody(const Page &page, std::size_t num_cells);
+  };
+
+  struct LeafNode {
+    LeafHeader header;
+    LeafBody body;
+
+    friend std::ostream &operator<<(std::ostream &out, const LeafNode &s) {
+      out << "leaf (size " << s.header.num_cells << ")\n";
+      for (auto i = 0U; i < s.header.num_cells; ++i) {
+        out << "  - " << i << " : " << s.body.cells[i].key << '\n';
+      }
+      return out;
+    };
+
+    LeafNode();
+    explicit LeafNode(const Page &page);
+
+    void serialize(char *destination);
+
+    void insert(uint32_t key, const Row &row);
+  };
 
   bool cached;
   std::array<char, PAGE_SIZE> data;
@@ -128,43 +161,15 @@ struct Pager {
 };
 
 struct Table {
-  struct Cursor {
-    Table &table;
-    std::size_t page_num;
-    std::size_t cell_num;
-    bool end_of_table;
-
-    void advance();
-    char *value();
-  };
-
-  static constexpr std::size_t max_rows() { return Pager::MAX_PAGES * Page::rows_per_page(); }
-
   Pager pager;
   std::size_t root_page_num;
 
   explicit Table(const std::string &filename);
 
-  Cursor table_start();
-
-  Cursor table_end();
-
   void db_close();
 };
 
-uint32_t *leaf_node_num_cells(Page &page);
-
-char *leaf_node_cell(Page &page, std::size_t cell_num);
-
-uint32_t *leaf_node_key(Page &page, std::size_t cell_num);
-
-char *leaf_node_value(Page &page, std::size_t cell_num);
-
-void leaf_node_insert(Cursor &cursor, uint32_t key, const Row &value);
-
 void print_constants();
-
-void print_leaf_node(Page &page);
 
 MetaCommandResult do_meta_command(const std::string &command, Table &table);
 

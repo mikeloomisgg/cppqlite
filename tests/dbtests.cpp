@@ -6,7 +6,7 @@
 #include "../db.hpp"
 
 TEST_CASE("Serialize/deserialize puts rows into raw memory and back to struct") {
-  char storage[Row::row_size()];
+  char storage[Row::row_size];
   Row output_row{};
   {
     Row row(1, "username", "email");
@@ -59,14 +59,12 @@ TEST_CASE("Execute_insert returns table full or succeeds if row fits") {
   REQUIRE(execute_insert(statement, table) == ExecuteResult::SUCCESS);
 
   Table fill_this_table{"filldb.db"};
-  ExecuteResult last_execute = ExecuteResult::UNHANDLED_STATEMENT;
-  for (auto i = 0; i < Table::max_rows(); ++i) {
+  for (auto i = 0; i < Page::LeafBody::max_cells; ++i) {
     char buffer[50];
     sprintf_s(buffer, "insert %d user#%d person#%d@example.com", i, i, i);
     prepare_statement(buffer, statement);
-    last_execute = execute_insert(statement, fill_this_table);
+    REQUIRE(execute_insert(statement, fill_this_table) == ExecuteResult::SUCCESS);
   }
-  REQUIRE(last_execute == ExecuteResult::SUCCESS);
   REQUIRE(execute_insert(statement, fill_this_table) == ExecuteResult::TABLE_FULL);
   fill_this_table.db_close();
   std::remove("filldb.db");
