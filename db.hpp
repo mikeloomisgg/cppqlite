@@ -14,6 +14,7 @@
 
 enum class ExecuteResult {
   SUCCESS,
+  DUPLICATE_KEY,
   TABLE_FULL,
   UNHANDLED_STATEMENT
 };
@@ -116,7 +117,7 @@ struct Page {
     static const std::size_t max_cells = space_for_cells / LeafCell::cell_size;
 
     std::array<LeafCell, max_cells> cells;
-    
+
     LeafBody();
     explicit LeafBody(const Page &page, std::size_t num_cells);
   };

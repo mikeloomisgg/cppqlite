@@ -169,6 +169,44 @@ void Table::db_close() {
   pager.file.close();
 }
 
+Cursor table_find(Table &table, uint32_t key) {
+  auto root_page_num = table.root_page_num;
+  auto &root_node = table.pager.get_page(root_page_num);
+
+  if (root_node.get_node_type() == Page::NodeType::LEAF) {
+    return leaf_node_find(table, root_page_num, key);
+  } else {
+    std::cerr << "Need to implement searching an internal node.\n";
+    exit(EXIT_FAILURE);
+  }
+}
+
+Cursor leaf_node_find(Table &table, std::size_t page_num, uint32_t key) {
+  auto &node = table.pager.get_page(page_num);
+  auto num_cells = *leaf_node_num_cells(node);
+
+  Cursor cursor{table, page_num};
+
+  uint32_t min_index = 0;
+  uint32_t one_past_max_index = num_cells;
+  while (one_past_max_index != min_index) {
+    uint32_t index = (min_index + one_past_max_index) / 2;
+    uint32_t key_at_index = *leaf_node_key(node, index);
+    if (key == key_at_index) {
+      cursor.cell_num = index;
+      return cursor;
+    }
+    if (key < key_at_index) {
+      one_past_max_index = index;
+    } else {
+      min_index = index + 1;
+    }
+  }
+
+  cursor.cell_num = min_index;
+  return cursor;
+}
+
 MetaCommandResult do_meta_command(const std::string &command, Table &table) {
   if (command == ".exit") {
     table.db_close();
@@ -245,6 +283,16 @@ ExecuteResult execute_insert(const Statement &statement, Table &table) {
   }
 
   const Row &row_to_insert = statement.row_to_insert;
+//  auto key_to_insert = row_to_insert.id;
+//  auto cursor = table_find(table, key_to_insert);
+//
+//  if (cursor.cell_num < num_cells) {
+//    auto key_at_index = *leaf_node_key(node, cursor.cell_num);
+//    if (key_at_index == key_to_insert) {
+//      return ExecuteResult::DUPLICATE_KEY;
+//    }
+//  }
+//  leaf_node_insert(cursor, row_to_insert.id, row_to_insert);
   node.insert(row_to_insert.id, row_to_insert);
   node.serialize(page.data.data());
 
