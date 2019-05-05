@@ -167,6 +167,45 @@ void Pager::flush(std::size_t page_num) {
   pages[page_num].cached = false;
 }
 
+std::size_t Pager::get_unused_page_num() {
+  return num_pages;
+}
+
+void indent(uint32_t level) {
+  for (auto i = 0U; i < level; i++) {
+    std::cout << "  ";
+  }
+}
+
+void Pager::print_tree(uint32_t page_num, uint32_t indentation_level) {
+  auto node = get_page(page_num);
+  uint32_t num_keys, child;
+  switch (node.node_type()) {
+    case Page::NodeType::LEAF:
+      num_keys = *node.num_cells();
+      indent(indentation_level);
+      std::cout << "- leaf (size " << num_keys << ")\n";
+      for (auto i = 0U; i < num_keys; i++) {
+        indent(indentation_level + 1);
+        std::cout << "- " << *node.key(i) << '\n';
+      }
+      break;
+    case Page::NodeType::INTERNAL:
+      num_keys = *node.num_keys();
+      indent(indentation_level);
+      std::cout << "- internal (size " << num_keys << ")\n";
+      for (auto i = 0U; i < num_keys; i++) {
+        child = *node.child(i);
+        print_tree(child, indentation_level + 1);
+        indent(indentation_level + 1);
+        std::cout << "- key " << *node.key(i) << '\n';
+      }
+      child = *node.right_child();
+      print_tree(child, indentation_level + 1);
+      break;
+  }
+}
+
 Table::Table(const std::string &filename)
     : pager(filename),
       root_page_num(0) {
