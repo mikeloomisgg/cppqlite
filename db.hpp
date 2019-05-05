@@ -74,74 +74,6 @@ struct Statement {
 struct Page {
   static const uint32_t PAGE_SIZE = 4096;
 
-  struct CommonHeader {
-    enum class NodeType : uint8_t {
-      INTERNAL,
-      LEAF
-    };
-    NodeType node_type;
-    bool is_root;
-    Page *parent;
-
-    static const std::size_t node_type_size = sizeof(node_type);
-    static const std::size_t is_root_size = sizeof(is_root);
-    static const std::size_t parent_pointer_size = sizeof(parent);
-    static const std::size_t size = node_type_size + is_root_size + parent_pointer_size;
-
-    CommonHeader();
-    explicit CommonHeader(const Page &page);
-  };
-
-  struct LeafHeader {
-    CommonHeader common_header;
-    uint32_t num_cells;
-
-    static const std::size_t num_cells_size = sizeof(num_cells);
-    static const std::size_t size = CommonHeader::size + num_cells_size;
-
-    LeafHeader();
-    explicit LeafHeader(const Page &page);
-  };
-
-  struct LeafCell {
-    uint32_t key;
-    Row value;
-
-    static const std::size_t key_size = sizeof(key);
-    static const std::size_t value_size = Row::row_size;
-    static const std::size_t cell_size = key_size + value_size;
-  };
-
-  struct LeafBody {
-    static const std::size_t space_for_cells = Page::PAGE_SIZE - LeafHeader::size;
-    static const std::size_t max_cells = space_for_cells / LeafCell::cell_size;
-
-    std::array<LeafCell, max_cells> cells;
-
-    LeafBody();
-    explicit LeafBody(const Page &page, std::size_t num_cells);
-  };
-
-  struct LeafNode {
-    LeafHeader header;
-    LeafBody body;
-
-    friend std::ostream &operator<<(std::ostream &out, const LeafNode &s) {
-      out << "leaf (size " << s.header.num_cells << ")\n";
-      for (auto i = 0U; i < s.header.num_cells; ++i) {
-        out << "  - " << i << " : " << s.body.cells[i].key << '\n';
-      }
-      return out;
-    };
-
-    LeafNode();
-    explicit LeafNode(const Page &page);
-
-    void serialize(char *destination);
-
-    void insert(uint32_t key, const Row &row);
-  };
-
   bool cached;
   std::array<char, PAGE_SIZE> data;
 };
@@ -162,12 +94,99 @@ struct Pager {
 };
 
 struct Table {
+  struct Cursor {
+    std::size_t page_num;
+    std::size_t cell_num;
+    bool end_of_table;
+
+    void advance(Table &table);
+    Row value(Table &table);
+  };
+
   Pager pager;
   std::size_t root_page_num;
 
   explicit Table(const std::string &filename);
 
+  Cursor table_start();
+
+  Cursor table_end();
+
+  Cursor find(uint32_t key);
+
   void db_close();
+};
+
+struct CommonHeader {
+  enum class NodeType : uint8_t {
+    INTERNAL,
+    LEAF
+  };
+  NodeType node_type;
+  bool is_root;
+  Page *parent;
+
+  static const std::size_t node_type_size = sizeof(node_type);
+  static const std::size_t is_root_size = sizeof(is_root);
+  static const std::size_t parent_pointer_size = sizeof(parent);
+  static const std::size_t size = node_type_size + is_root_size + parent_pointer_size;
+
+  CommonHeader();
+  explicit CommonHeader(const Page &page);
+};
+
+struct LeafHeader {
+  CommonHeader common_header;
+  uint32_t num_cells;
+
+  static const std::size_t num_cells_size = sizeof(num_cells);
+  static const std::size_t size = CommonHeader::size + num_cells_size;
+
+  LeafHeader();
+  explicit LeafHeader(const Page &page);
+};
+
+struct LeafCell {
+  uint32_t key;
+  Row value;
+
+  static const std::size_t key_size = sizeof(key);
+  static const std::size_t value_size = Row::row_size;
+  static const std::size_t cell_size = key_size + value_size;
+};
+
+struct LeafBody {
+  static const std::size_t space_for_cells = Page::PAGE_SIZE - LeafHeader::size;
+  static const std::size_t max_cells = space_for_cells / LeafCell::cell_size;
+
+  std::array<LeafCell, max_cells> cells;
+
+  LeafBody();
+  explicit LeafBody(const Page &page, std::size_t num_cells);
+};
+
+struct LeafNode {
+  LeafHeader header;
+  LeafBody body;
+
+  friend std::ostream &operator<<(std::ostream &out, const LeafNode &s) {
+    out << "leaf (size " << s.header.num_cells << ")\n";
+    for (auto i = 0U; i < s.header.num_cells; ++i) {
+      out << "  - " << i << " : " << s.body.cells[i].key << '\n';
+    }
+    return out;
+  };
+
+  LeafNode();
+  explicit LeafNode(const Page &page);
+
+  void serialize(char *destination);
+
+  void push_back(uint32_t key, const Row &row);
+
+  void insert(Table::Cursor cursor, uint32_t key, const Row &row);
+
+  std::size_t find(uint32_t key);
 };
 
 void print_constants();

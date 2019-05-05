@@ -59,7 +59,7 @@ TEST_CASE("Execute_insert returns table full or succeeds if row fits") {
   REQUIRE(execute_insert(statement, table) == ExecuteResult::SUCCESS);
 
   Table fill_this_table{"filldb.db"};
-  for (auto i = 0; i < Page::LeafBody::max_cells; ++i) {
+  for (auto i = 0; i < LeafBody::max_cells; ++i) {
     char buffer[50];
     sprintf_s(buffer, "insert %d user#%d person#%d@example.com", i, i, i);
     prepare_statement(buffer, statement);
@@ -116,6 +116,24 @@ TEST_CASE("Data in table persists after reinitializing table") {
     REQUIRE(std::string(selected_rows[0].email.data()) == "test@email.com");
     table.db_close();
   }
+  std::remove("test.db");
+}
+
+TEST_CASE("Inserting duplicate keys returns error") {
+  std::remove("test.db");
+  Table table{"test.db"};
+  Statement statement{};
+  REQUIRE(prepare_statement("insert 1 test test@email.com", statement) == PrepareResult::SUCCESS);
+  REQUIRE(execute_insert(statement, table) == ExecuteResult::SUCCESS);
+  REQUIRE(prepare_statement("insert 1 test test@email.com", statement) == PrepareResult::SUCCESS);
+  REQUIRE(execute_insert(statement, table) == ExecuteResult::DUPLICATE_KEY);
+
+  REQUIRE(prepare_statement("select", statement) == PrepareResult::SUCCESS);
+  std::vector<Row> selected_rows;
+  REQUIRE(execute_select(statement, table, selected_rows) == ExecuteResult::SUCCESS);
+  REQUIRE(selected_rows.size() == 1);
+  REQUIRE(selected_rows[0].id == 1);
+
   std::remove("test.db");
 }
 
