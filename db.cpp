@@ -264,6 +264,13 @@ Table::Cursor InternalNode::find(Table &table, uint32_t page_num, uint32_t key) 
   }
 }
 
+void InternalNode::update_key(uint32_t old_key, uint32_t new_key) {
+  auto old_child_index = find_index(old_key);
+  if (old_child_index != header.num_keys) {
+    body.cells[old_child_index].key = new_key;
+  }
+}
+
 Pager::Pager(const std::string &filename)
     : file(filename, std::ios::in | std::ios::out | std::ios::app | std::ios::binary),
       file_length(),

@@ -257,15 +257,7 @@ struct InternalNode {
     return min_index;
   }
 
-  void update_key(uint32_t old_key, uint32_t new_key) {
-    std::clog << "Updating " << old_key << " with " << new_key << '\n';
-    auto old_child_index = find_index(old_key);
-    if (old_child_index == header.num_keys) {
-      // No need to update a key since this was the right_child_page_num
-      return;
-    }
-    body.cells[old_child_index].key = new_key;
-  }
+  void update_key(uint32_t old_key, uint32_t new_key);
 };
 
 void print_constants();
