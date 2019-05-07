@@ -39,11 +39,12 @@ CommonHeader::CommonHeader(const Page &page)
   parent_page_num = *(uint32_t *) (page.data.data() + CommonHeader::node_type_size + CommonHeader::is_root_size);
 }
 
-LeafHeader::LeafHeader() : common_header(), num_cells() {}
+LeafHeader::LeafHeader() : common_header(), num_cells(), next_leaf_page_num() {}
 
 LeafHeader::LeafHeader(const Page &page)
-    : common_header(page), num_cells() {
+    : common_header(page), num_cells(), next_leaf_page_num() {
   num_cells = *(uint32_t *) (page.data.data() + CommonHeader::size);
+  next_leaf_page_num = *(uint32_t *) (page.data.data() + CommonHeader::size + LeafHeader::num_cells_size);
 }
 
 LeafBody::LeafBody() : cells() {}
@@ -80,6 +81,9 @@ void LeafNode::serialize(char *dest) {
          CommonHeader::parent_page_num_size);
 
   memcpy(dest + CommonHeader::size, &header.num_cells, LeafHeader::num_cells_size);
+  memcpy(dest + CommonHeader::size + LeafHeader::num_cells_size,
+         &header.next_leaf_page_num,
+         LeafHeader::next_leaf_page_num_size);
 
   for (auto i = 0U; i < header.num_cells; ++i) {
     memcpy(dest + LeafHeader::size + i * LeafCell::size, &body.cells[i].key, LeafCell::key_size);
@@ -121,7 +125,6 @@ void create_new_root(Table &table, std::size_t right_child_page_num) {
   new_root.header.right_child_page_num = (uint32_t) right_child_page_num;
   left_node.serialize(left_page.data.data());
   new_root.serialize(root_page.data.data());
-
 }
 
 void LeafNode::split_and_insert(Table::Cursor cursor, const uint32_t key, const Row &value) {
@@ -153,8 +156,10 @@ void LeafNode::split_and_insert(Table::Cursor cursor, const uint32_t key, const 
     }
   }
 
-  old_node.header.num_cells = left_split_count;
   new_node.header.num_cells = right_split_count;
+  new_node.header.next_leaf_page_num = old_node.header.next_leaf_page_num;
+  old_node.header.num_cells = left_split_count;
+  old_node.header.next_leaf_page_num = (uint32_t) new_page_num;
   old_node.serialize(old_page.data.data());
   new_node.serialize(new_page.data.data());
 
@@ -233,10 +238,10 @@ Table::Cursor InternalNode::find(Table &table, uint32_t page_num, uint32_t key) 
   auto min_index = 0;
   auto max_index = num_keys;
 
-  while(min_index != max_index) {
+  while (min_index != max_index) {
     auto index = (min_index + max_index) / 2;
     auto key_to_right = node.body.cells[index].key;
-    if(key_to_right >= key) {
+    if (key_to_right >= key) {
       max_index = index;
     } else {
       min_index = index + 1;
@@ -244,16 +249,18 @@ Table::Cursor InternalNode::find(Table &table, uint32_t page_num, uint32_t key) 
   }
 
   uint32_t child_page_num;
-  if(min_index == num_keys) {
+  if (min_index == num_keys) {
     child_page_num = node.header.right_child_page_num;
   } else {
     child_page_num = node.body.cells[min_index].child_page_num;
   }
 
   auto child_page = table.pager.get_page(child_page_num);
-  switch(CommonHeader{child_page}.node_type) {
-    case CommonHeader::NodeType::LEAF:
-      return Table::Cursor{table, child_page_num, LeafNode{child_page}.find(key)};
+  switch (CommonHeader{child_page}.node_type) {
+    case CommonHeader::NodeType::LEAF: {
+      auto child_node = LeafNode{child_page};
+      return Table::Cursor{table, child_page_num, child_node.find(key), child_node.header.next_leaf_page_num == 0};
+    }
     case CommonHeader::NodeType::INTERNAL:
       return InternalNode{child_page}.find(table, child_page_num, key);
   }
@@ -369,10 +376,16 @@ Row Table::Cursor::value() {
 
 void Table::Cursor::advance() {
   auto &page = table.pager.get_page(page_num);
-  auto node = LeafNode{page};
   cell_num++;
+  auto node = LeafNode{page};
   if (cell_num >= node.header.num_cells) {
-    end_of_table = true;
+    auto next_page_num = node.header.next_leaf_page_num;
+    if (next_page_num == 0) {
+      end_of_table = true;
+    } else {
+      page_num = next_page_num;
+      cell_num = 0;
+    }
   }
 }
 
@@ -381,20 +394,7 @@ Page &Table::Cursor::page() {
 }
 
 Table::Cursor Table::table_start() {
-  auto page_num = root_page_num;
-  auto cell_num = 0U;
-  auto root_page = pager.get_page(root_page_num);
-  LeafNode node{root_page};
-  auto end_of_table = node.header.num_cells == 0;
-  return Table::Cursor{*this, page_num, cell_num, end_of_table};
-}
-
-Table::Cursor Table::table_end() {
-  auto page_num = root_page_num;
-  auto root_page = pager.get_page(root_page_num);
-  LeafNode node{root_page};
-  auto cell_num = node.header.num_cells;
-  return Table::Cursor{*this, page_num, cell_num, true};
+  return find(0);
 }
 
 void Table::db_close() {
@@ -408,12 +408,14 @@ void Table::db_close() {
 }
 
 Table::Cursor Table::find(uint32_t key) {
-  auto &root_node = pager.get_page(root_page_num);
+  auto &root_page = pager.get_page(root_page_num);
 
-  if (CommonHeader{root_node}.node_type == CommonHeader::NodeType::LEAF) {
-    return Cursor{*this, root_page_num, LeafNode{root_node}.find(key)};
+  if (CommonHeader{root_page}.node_type == CommonHeader::NodeType::LEAF) {
+    auto node = LeafNode{root_page};
+    auto cell_num = node.find(key);
+    return Cursor{*this, root_page_num, cell_num, cell_num == node.header.num_cells};
   } else {
-    return InternalNode{root_node}.find(*this, (uint32_t) root_page_num, key);
+    return InternalNode{root_page}.find(*this, (uint32_t) root_page_num, key);
   }
 }
 
@@ -513,7 +515,7 @@ ExecuteResult execute_insert(const Statement &statement, Table &table) {
   const Row &row_to_insert = statement.row_to_insert;
   auto key_to_insert = row_to_insert.id;
   auto cursor = table.find(key_to_insert);
-  
+
   auto node = LeafNode{cursor.page()};
   if (cursor.cell_num < node.header.num_cells) {
     auto key_at_index = node.body.cells[cursor.cell_num].key;
@@ -527,14 +529,11 @@ ExecuteResult execute_insert(const Statement &statement, Table &table) {
 }
 
 ExecuteResult execute_select(const Statement &statement, Table &table, std::vector<Row> &out_vec) {
-  for (auto i = 0U; i < table.pager.num_pages; ++i) {
-    auto &page = table.pager.get_page(i);
-    if(CommonHeader{page}.node_type == CommonHeader::NodeType::LEAF) {
-      auto node = LeafNode{page};
-      for (auto j = 0U; j < node.header.num_cells; ++j) {
-        out_vec.emplace_back(node.body.cells[j].value);
-      }
-    }
+  auto cursor = table.table_start();
+
+  while (!cursor.end_of_table) {
+    out_vec.emplace_back(cursor.value());
+    cursor.advance();
   }
 
   return ExecuteResult::SUCCESS;

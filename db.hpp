@@ -106,7 +106,7 @@ struct Table {
 
     void advance();
     Row value();
-    Page& page();
+    Page &page();
   };
 
   Pager pager;
@@ -115,8 +115,6 @@ struct Table {
   explicit Table(const std::string &filename);
 
   Cursor table_start();
-
-  Cursor table_end();
 
   Cursor find(uint32_t key);
 
@@ -144,9 +142,11 @@ struct CommonHeader {
 struct LeafHeader {
   CommonHeader common_header;
   uint32_t num_cells;
+  uint32_t next_leaf_page_num;
 
   static const std::size_t num_cells_size = sizeof(num_cells);
-  static const std::size_t size = CommonHeader::size + num_cells_size;
+  static const std::size_t next_leaf_page_num_size = sizeof(next_leaf_page_num);
+  static const std::size_t size = CommonHeader::size + num_cells_size + next_leaf_page_num_size;
 
   LeafHeader();
   explicit LeafHeader(const Page &page);
