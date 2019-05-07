@@ -119,6 +119,8 @@ struct Table {
   Cursor find(uint32_t key);
 
   void db_close();
+
+  void insert(uint32_t parent_page_num, uint32_t child_page_num);
 };
 
 struct CommonHeader {
@@ -238,6 +240,32 @@ struct InternalNode {
   uint32_t max_key() const;
 
   Table::Cursor find(Table &table, uint32_t page_num, uint32_t key);
+
+  std::size_t find_index(uint32_t key) {
+    auto min_index = 0;
+    auto max_index = header.num_keys;
+
+    while (min_index != max_index) {
+      auto index = (min_index + max_index) / 2;
+      auto key_to_right = body.cells[index].key;
+      if (key_to_right >= key) {
+        max_index = index;
+      } else {
+        min_index = index + 1;
+      }
+    }
+    return min_index;
+  }
+
+  void update_key(uint32_t old_key, uint32_t new_key) {
+    std::clog << "Updating " << old_key << " with " << new_key << '\n';
+    auto old_child_index = find_index(old_key);
+    if (old_child_index == header.num_keys) {
+      // No need to update a key since this was the right_child_page_num
+      return;
+    }
+    body.cells[old_child_index].key = new_key;
+  }
 };
 
 void print_constants();

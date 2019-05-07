@@ -123,6 +123,10 @@ void create_new_root(Table &table, std::size_t right_child_page_num) {
   new_root.header.num_keys = 1;
   new_root.body.cells[0] = InternalCell{left_node.max_key(), left_child_page_num};
   new_root.header.right_child_page_num = (uint32_t) right_child_page_num;
+  left_node.header.common_header.parent_page_num = (uint32_t) table.root_page_num;
+  auto right_node = LeafNode{right_page};
+  right_node.header.common_header.parent_page_num = (uint32_t) table.root_page_num;
+  right_node.serialize(right_page.data.data());
   left_node.serialize(left_page.data.data());
   new_root.serialize(root_page.data.data());
 }
@@ -134,6 +138,12 @@ void LeafNode::split_and_insert(Table::Cursor cursor, const uint32_t key, const 
   auto new_node = LeafNode{};
   new_node.serialize(new_page.data.data());
   auto old_node = LeafNode{old_page};
+  auto old_max = old_node.max_key();
+  new_node.header.num_cells = right_split_count;
+  new_node.header.next_leaf_page_num = old_node.header.next_leaf_page_num;
+  new_node.header.common_header.parent_page_num = old_node.header.common_header.parent_page_num;
+  old_node.header.num_cells = left_split_count;
+  old_node.header.next_leaf_page_num = (uint32_t) new_page_num;
 
   for (int i = LeafBody::max_cells; i >= 0; i--) {
     auto index_within_node = i % left_split_count;
@@ -156,18 +166,18 @@ void LeafNode::split_and_insert(Table::Cursor cursor, const uint32_t key, const 
     }
   }
 
-  new_node.header.num_cells = right_split_count;
-  new_node.header.next_leaf_page_num = old_node.header.next_leaf_page_num;
-  old_node.header.num_cells = left_split_count;
-  old_node.header.next_leaf_page_num = (uint32_t) new_page_num;
   old_node.serialize(old_page.data.data());
   new_node.serialize(new_page.data.data());
 
   if (old_node.header.common_header.is_root) {
     create_new_root(cursor.table, new_page_num);
   } else {
-    std::cerr << "Need to implement updating parent after split.\n";
-    exit(EXIT_FAILURE);
+    auto parent_page_num = old_node.header.common_header.parent_page_num;
+    auto new_max = old_node.max_key();
+    auto &parent_page = cursor.table.pager.get_page(parent_page_num);
+    auto parent_node = InternalNode{parent_page};
+    parent_node.update_key(old_max, new_max);
+    cursor.table.insert((uint32_t) parent_page_num, (uint32_t) new_page_num);
   }
 }
 
@@ -233,26 +243,14 @@ uint32_t InternalNode::max_key() const {
 Table::Cursor InternalNode::find(Table &table, uint32_t page_num, uint32_t key) {
   auto page = table.pager.get_page(page_num);
   auto node = InternalNode{page};
-  auto num_keys = node.header.num_keys;
 
-  auto min_index = 0;
-  auto max_index = num_keys;
-
-  while (min_index != max_index) {
-    auto index = (min_index + max_index) / 2;
-    auto key_to_right = node.body.cells[index].key;
-    if (key_to_right >= key) {
-      max_index = index;
-    } else {
-      min_index = index + 1;
-    }
-  }
+  auto index = find_index(key);
 
   uint32_t child_page_num;
-  if (min_index == num_keys) {
+  if (index == header.num_keys) {
     child_page_num = node.header.right_child_page_num;
   } else {
-    child_page_num = node.body.cells[min_index].child_page_num;
+    child_page_num = node.body.cells[index].child_page_num;
   }
 
   auto child_page = table.pager.get_page(child_page_num);
@@ -417,6 +415,37 @@ Table::Cursor Table::find(uint32_t key) {
   } else {
     return InternalNode{root_page}.find(*this, (uint32_t) root_page_num, key);
   }
+}
+
+void Table::insert(uint32_t parent_page_num, uint32_t child_page_num) {
+  auto &parent_page = pager.get_page(parent_page_num);
+  auto parent_node = InternalNode{parent_page};
+  auto &child_page = pager.get_page(child_page_num);
+  auto child_max_key = LeafNode{child_page}.max_key();
+  auto index = parent_node.find_index(child_max_key);
+  auto original_num_keys = parent_node.header.num_keys;
+  parent_node.header.num_keys++;
+
+  if (original_num_keys >= InternalBody::max_cells) {
+    std::cerr << "Need to implement splitting internal nodes.\n";
+    exit(EXIT_FAILURE);
+  }
+
+  auto right_child_page_num = parent_node.header.right_child_page_num;
+  auto &right_child_page = pager.get_page(right_child_page_num);
+  auto right_child_node = LeafNode{right_child_page};
+
+  if (child_max_key > right_child_node.max_key()) {
+    parent_node.body.cells[original_num_keys] = InternalCell{right_child_node.max_key(), right_child_page_num};
+    parent_node.header.right_child_page_num = child_page_num;
+  } else {
+    for (auto i = original_num_keys; i > index; i--) {
+      parent_node.body.cells[i] = parent_node.body.cells[i - 1];
+    }
+    parent_node.body.cells[index] = InternalCell{child_max_key, child_page_num};
+  }
+
+  parent_node.serialize(parent_page.data.data());
 }
 
 std::size_t LeafNode::find(uint32_t key) {
