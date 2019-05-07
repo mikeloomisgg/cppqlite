@@ -59,13 +59,13 @@ TEST_CASE("Execute_insert returns table full or succeeds if row fits") {
   REQUIRE(execute_insert(statement, table) == ExecuteResult::SUCCESS);
 
   Table fill_this_table{"filldb.db"};
-  for (auto i = 0; i < LeafBody::max_cells; ++i) {
+  // Table won't actually fill until internal nodes can be searched
+  for (auto i = 0; i <= LeafBody::max_cells; ++i) {
     char buffer[50];
-    sprintf_s(buffer, "insert %d user#%d person#%d@example.com", i, i, i);
+    sprintf_s(buffer, "insert %d user#%d person#%d@example.com", i + 1, i + 1, i + 1);
     prepare_statement(buffer, statement);
     REQUIRE(execute_insert(statement, fill_this_table) == ExecuteResult::SUCCESS);
   }
-  REQUIRE(execute_insert(statement, fill_this_table) == ExecuteResult::TABLE_FULL);
   fill_this_table.db_close();
   std::remove("filldb.db");
 }

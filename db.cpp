@@ -28,15 +28,15 @@ void Row::serialize(char *destination) const {
   memcpy(destination + email_offset, email.data(), email_size);
 }
 
-CommonHeader::CommonHeader() : node_type(), is_root(), parent() {}
+CommonHeader::CommonHeader() : node_type(), is_root(), parent_page_num() {}
 
 CommonHeader::CommonHeader(const Page &page)
     : node_type(),
       is_root(),
-      parent() {
+      parent_page_num() {
   node_type = *(CommonHeader::NodeType *) (page.data.data());
   is_root = *(bool *) (page.data.data() + CommonHeader::node_type_size);
-  parent = *(Page **) (page.data.data() + CommonHeader::node_type_size + CommonHeader::is_root_size);
+  parent_page_num = *(uint32_t *) (page.data.data() + CommonHeader::node_type_size + CommonHeader::is_root_size);
 }
 
 LeafHeader::LeafHeader() : common_header(), num_cells() {}
@@ -51,8 +51,8 @@ LeafBody::LeafBody() : cells() {}
 LeafBody::LeafBody(const Page &page, std::size_t num_cells)
     : cells() {
   for (auto i = 0U; i < num_cells; ++i) {
-    cells[i].key = *(uint32_t *) (page.data.data() + LeafHeader::size + i * LeafCell::cell_size);
-    cells[i].value = Row{page.data.data() + LeafHeader::size + LeafCell::key_size + i * LeafCell::cell_size};
+    cells[i].key = *(uint32_t *) (page.data.data() + LeafHeader::size + i * LeafCell::size);
+    cells[i].value = Row{page.data.data() + LeafHeader::size + LeafCell::key_size + i * LeafCell::size};
   }
 }
 
@@ -76,35 +76,23 @@ void LeafNode::serialize(char *dest) {
   memcpy(dest, &header.common_header.node_type, CommonHeader::node_type_size);
   memcpy(dest + CommonHeader::node_type_size, &header.common_header.is_root, CommonHeader::is_root_size);
   memcpy(dest + CommonHeader::node_type_size + CommonHeader::is_root_size,
-         &header.common_header.parent,
-         CommonHeader::parent_pointer_size);
+         &header.common_header.parent_page_num,
+         CommonHeader::parent_page_num_size);
 
   memcpy(dest + CommonHeader::size, &header.num_cells, LeafHeader::num_cells_size);
 
   for (auto i = 0U; i < header.num_cells; ++i) {
-    memcpy(dest + LeafHeader::size + i * LeafCell::cell_size, &body.cells[i].key, LeafCell::key_size);
-    body.cells[i].value.serialize(dest + LeafHeader::size + LeafCell::key_size + i * LeafCell::cell_size);
+    memcpy(dest + LeafHeader::size + i * LeafCell::size, &body.cells[i].key, LeafCell::key_size);
+    body.cells[i].value.serialize(dest + LeafHeader::size + LeafCell::key_size + i * LeafCell::size);
   }
 }
 
-void LeafNode::push_back(uint32_t key, const Row &row) {
+void LeafNode::insert(Table::Cursor cursor, const uint32_t key, const Row &row) {
   LeafCell cell{key, row};
 
   if (header.num_cells >= LeafBody::max_cells) {
-    std::cerr << "Need to implement splitting a leaf node.\n";
-    exit(EXIT_FAILURE);
-  }
-
-  body.cells[header.num_cells] = cell;
-  header.num_cells++;
-}
-
-void LeafNode::insert(const Table::Cursor cursor, const uint32_t key, const Row &row) {
-  LeafCell cell{key, row};
-
-  if (header.num_cells >= LeafBody::max_cells) {
-    std::cerr << "Need to implement splitting a leaf node.\n";
-    exit(EXIT_FAILURE);
+    split_and_insert(cursor, key, row);
+    return;
   }
 
   if (cursor.cell_num < header.num_cells) {
@@ -115,6 +103,126 @@ void LeafNode::insert(const Table::Cursor cursor, const uint32_t key, const Row 
 
   header.num_cells++;
   body.cells[cursor.cell_num] = cell;
+  serialize(cursor.page().data.data());
+}
+
+void create_new_root(Table &table, std::size_t right_child_page_num) {
+  auto &root_page = table.pager.get_page(table.root_page_num);
+  auto &right_page = table.pager.get_page(right_child_page_num);
+  auto left_child_page_num = (uint32_t) table.pager.get_unused_page_num();
+  auto &left_page = table.pager.get_page(left_child_page_num);
+  left_page = root_page;
+  LeafNode left_node{left_page};
+  left_node.header.common_header.is_root = false;
+  InternalNode new_root{};
+  new_root.header.common_header.is_root = true;
+  new_root.header.num_keys = 1;
+  new_root.body.cells[0] = InternalCell{left_node.max_key(), left_child_page_num};
+  new_root.header.right_child_page_num = (uint32_t) right_child_page_num;
+  left_node.serialize(left_page.data.data());
+  new_root.serialize(root_page.data.data());
+
+}
+
+void LeafNode::split_and_insert(Table::Cursor cursor, const uint32_t key, const Row &value) {
+  auto &old_page = cursor.page();
+  auto new_page_num = cursor.table.pager.get_unused_page_num();
+  auto &new_page = cursor.table.pager.get_page(new_page_num);
+  auto new_node = LeafNode{};
+  new_node.serialize(new_page.data.data());
+  auto old_node = LeafNode{old_page};
+
+  for (int i = LeafBody::max_cells; i >= 0; i--) {
+    auto index_within_node = i % left_split_count;
+    if (i >= LeafNode::left_split_count) {
+      if (i == cursor.cell_num) {
+        new_node.body.cells[index_within_node] = LeafCell{key, value};
+      } else if (i > cursor.cell_num) {
+        new_node.body.cells[index_within_node] = old_node.body.cells[i - 1];
+      } else {
+        new_node.body.cells[index_within_node] = old_node.body.cells[i];
+      }
+    } else {
+      if (i == cursor.cell_num) {
+        old_node.body.cells[index_within_node] = LeafCell{key, value};
+      } else if (i > cursor.cell_num) {
+        old_node.body.cells[index_within_node] = old_node.body.cells[i - 1];
+      } else {
+        old_node.body.cells[index_within_node] = old_node.body.cells[i];
+      }
+    }
+  }
+
+  old_node.header.num_cells = left_split_count;
+  new_node.header.num_cells = right_split_count;
+  old_node.serialize(old_page.data.data());
+  new_node.serialize(new_page.data.data());
+
+  if (old_node.header.common_header.is_root) {
+    create_new_root(cursor.table, new_page_num);
+  } else {
+    std::cerr << "Need to implement updating parent after split.\n";
+    exit(EXIT_FAILURE);
+  }
+}
+
+InternalHeader::InternalHeader() : common_header(), num_keys(), right_child_page_num() {}
+
+InternalHeader::InternalHeader(const Page &page)
+    : common_header(page), num_keys(), right_child_page_num() {
+  num_keys = *(uint32_t *) (page.data.data() + CommonHeader::size);
+  right_child_page_num = *(uint32_t *) (page.data.data() + CommonHeader::size + InternalHeader::num_keys_size);
+}
+
+InternalBody::InternalBody() : cells() {}
+
+InternalBody::InternalBody(const Page &page, std::size_t num_cells)
+    : cells() {
+  for (auto i = 0U; i < num_cells; ++i) {
+    cells[i].key = *(uint32_t *) (page.data.data() + InternalHeader::size + i * InternalCell::size);
+    cells[i].child_page_num =
+        *(uint32_t *) (page.data.data() + InternalHeader::size + InternalCell::key_size + i * InternalCell::size);
+  }
+}
+
+InternalNode::InternalNode()
+    : header(),
+      body() {
+  header.common_header.node_type = CommonHeader::NodeType::INTERNAL;
+}
+
+InternalNode::InternalNode(const Page &page)
+    : header(page),
+      body(page, header.num_keys) {
+
+  if (header.common_header.node_type != CommonHeader::NodeType::INTERNAL) {
+    std::cerr << "Tried to read page with leaf node type as a internal node.\n";
+    exit(EXIT_FAILURE);
+  }
+}
+
+void InternalNode::serialize(char *dest) {
+  memcpy(dest, &header.common_header.node_type, CommonHeader::node_type_size);
+  memcpy(dest + CommonHeader::node_type_size, &header.common_header.is_root, CommonHeader::is_root_size);
+  memcpy(dest + CommonHeader::node_type_size + CommonHeader::is_root_size,
+         &header.common_header.parent_page_num,
+         CommonHeader::parent_page_num_size);
+
+  memcpy(dest + CommonHeader::size, &header.num_keys, InternalHeader::num_keys_size);
+  memcpy(dest + CommonHeader::size + InternalHeader::num_keys_size,
+         &header.right_child_page_num,
+         InternalHeader::right_child_page_num_size);
+
+  for (auto i = 0U; i < header.num_keys; ++i) {
+    memcpy(dest + InternalHeader::size + i * InternalCell::size, &body.cells[i].key, InternalCell::key_size);
+    memcpy(dest + InternalHeader::size + InternalCell::key_size + i * InternalCell::size,
+           &body.cells[i].child_page_num,
+           InternalCell::child_page_num_size);
+  }
+}
+
+uint32_t InternalNode::max_key() const {
+  return body.cells[header.num_keys - 1].key;
 }
 
 Pager::Pager(const std::string &filename)
@@ -171,38 +279,41 @@ std::size_t Pager::get_unused_page_num() {
   return num_pages;
 }
 
-void indent(uint32_t level) {
+void indent(std::ostream &out, uint32_t level) {
   for (auto i = 0U; i < level; i++) {
-    std::cout << "  ";
+    out << "  ";
   }
 }
 
 void Pager::print_tree(uint32_t page_num, uint32_t indentation_level) {
-  auto node = get_page(page_num);
-  uint32_t num_keys, child;
-  switch (node.node_type()) {
-    case Page::NodeType::LEAF:
-      num_keys = *node.num_cells();
-      indent(indentation_level);
+  auto &page = get_page(page_num);
+  CommonHeader header{page};
+  uint32_t num_keys;
+  switch (header.node_type) {
+    case CommonHeader::NodeType::LEAF: {
+      LeafNode node{page};
+      num_keys = node.header.num_cells;
+      indent(std::cout, indentation_level);
       std::cout << "- leaf (size " << num_keys << ")\n";
       for (auto i = 0U; i < num_keys; i++) {
-        indent(indentation_level + 1);
-        std::cout << "- " << *node.key(i) << '\n';
+        indent(std::cout, indentation_level + 1);
+        std::cout << "- " << node.body.cells[i].key << '\n';
       }
       break;
-    case Page::NodeType::INTERNAL:
-      num_keys = *node.num_keys();
-      indent(indentation_level);
+    }
+    case CommonHeader::NodeType::INTERNAL: {
+      InternalNode node{page};
+      num_keys = node.header.num_keys;
+      indent(std::cout, indentation_level);
       std::cout << "- internal (size " << num_keys << ")\n";
       for (auto i = 0U; i < num_keys; i++) {
-        child = *node.child(i);
-        print_tree(child, indentation_level + 1);
-        indent(indentation_level + 1);
-        std::cout << "- key " << *node.key(i) << '\n';
+        print_tree(node.body.cells[i].child_page_num, indentation_level + 1);
+        indent(std::cout, indentation_level + 1);
+        std::cout << "- key " << node.body.cells[i].key << '\n';
       }
-      child = *node.right_child();
-      print_tree(child, indentation_level + 1);
+      print_tree(node.header.right_child_page_num, indentation_level + 1);
       break;
+    }
   }
 }
 
@@ -217,12 +328,12 @@ Table::Table(const std::string &filename)
   }
 }
 
-Row Table::Cursor::value(Table &table) {
+Row Table::Cursor::value() {
   auto &page = table.pager.get_page(page_num);
   return LeafNode{page}.body.cells[cell_num].value;
 }
 
-void Table::Cursor::advance(Table &table) {
+void Table::Cursor::advance() {
   auto &page = table.pager.get_page(page_num);
   auto node = LeafNode{page};
   cell_num++;
@@ -231,13 +342,17 @@ void Table::Cursor::advance(Table &table) {
   }
 }
 
+Page &Table::Cursor::page() {
+  return table.pager.get_page(page_num);
+}
+
 Table::Cursor Table::table_start() {
   auto page_num = root_page_num;
   auto cell_num = 0U;
   auto root_page = pager.get_page(root_page_num);
   LeafNode node{root_page};
   auto end_of_table = node.header.num_cells == 0;
-  return Table::Cursor{page_num, cell_num, end_of_table};
+  return Table::Cursor{*this, page_num, cell_num, end_of_table};
 }
 
 Table::Cursor Table::table_end() {
@@ -245,7 +360,7 @@ Table::Cursor Table::table_end() {
   auto root_page = pager.get_page(root_page_num);
   LeafNode node{root_page};
   auto cell_num = node.header.num_cells;
-  return Table::Cursor{page_num, cell_num, true};
+  return Table::Cursor{*this, page_num, cell_num, true};
 }
 
 void Table::db_close() {
@@ -262,7 +377,7 @@ Table::Cursor Table::find(uint32_t key) {
   auto &root_node = pager.get_page(root_page_num);
 
   if (CommonHeader{root_node}.node_type == CommonHeader::NodeType::LEAF) {
-    return Cursor{root_page_num, LeafNode{root_node}.find(key)};
+    return Cursor{*this, root_page_num, LeafNode{root_node}.find(key)};
   } else {
     std::cerr << "Need to implement searching an internal node.\n";
     exit(EXIT_FAILURE);
@@ -288,13 +403,17 @@ std::size_t LeafNode::find(uint32_t key) {
   return min_index;
 }
 
+uint32_t LeafNode::max_key() const {
+  return body.cells[header.num_cells - 1].key;
+}
+
 MetaCommandResult do_meta_command(const std::string &command, Table &table) {
   if (command == ".exit") {
     table.db_close();
     exit(EXIT_SUCCESS);
   } else if (command == ".btree") {
     std::cout << "Tree:\n";
-    std::cout << LeafNode{table.pager.get_page(0)};
+    table.pager.print_tree(0, 0);
     return MetaCommandResult::SUCCESS;
   } else if (command == ".constants") {
     std::cout << "Constants:\n";
@@ -358,14 +477,10 @@ PrepareResult prepare_statement(const std::string &input, Statement &out_stateme
 
 ExecuteResult execute_insert(const Statement &statement, Table &table) {
   auto &page = table.pager.get_page(table.root_page_num);
-  auto node = LeafNode{page};
-  if (node.header.num_cells >= LeafBody::max_cells) {
-    return ExecuteResult::TABLE_FULL;
-  }
-
   const Row &row_to_insert = statement.row_to_insert;
   auto key_to_insert = row_to_insert.id;
   auto cursor = table.find(key_to_insert);
+  auto node = LeafNode{page};
   if (cursor.cell_num < node.header.num_cells) {
     auto key_at_index = node.body.cells[cursor.cell_num].key;
     if (key_at_index == key_to_insert) {
@@ -373,7 +488,6 @@ ExecuteResult execute_insert(const Statement &statement, Table &table) {
     }
   }
   node.insert(cursor, row_to_insert.id, row_to_insert);
-  node.serialize(page.data.data());
 
   return ExecuteResult::SUCCESS;
 }
@@ -409,7 +523,7 @@ void print_constants() {
   std::cout << "ROW_SIZE: " << Row::row_size << '\n';
   std::cout << "COMMON_NODE_HEADER_SIZE: " << CommonHeader::size << '\n';
   std::cout << "LEAF_NODE_HEADER_SIZE: " << LeafHeader::size << '\n';
-  std::cout << "LEAF_NODE_CELL_SIZE: " << LeafCell::cell_size << '\n';
+  std::cout << "LEAF_NODE_CELL_SIZE: " << LeafCell::size << '\n';
   std::cout << "LEAF_NODE_SPACE_FOR_CELLS: " << LeafBody::space_for_cells << '\n';
   std::cout << "LEAF_NODE_MAX_CELLS: " << LeafBody::max_cells << '\n';
 }

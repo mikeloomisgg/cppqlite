@@ -99,12 +99,14 @@ struct Pager {
 
 struct Table {
   struct Cursor {
+    Table &table;
     std::size_t page_num;
     std::size_t cell_num;
     bool end_of_table;
 
-    void advance(Table &table);
-    Row value(Table &table);
+    void advance();
+    Row value();
+    Page& page();
   };
 
   Pager pager;
@@ -128,12 +130,12 @@ struct CommonHeader {
   };
   NodeType node_type;
   bool is_root;
-  Page *parent;
+  uint32_t parent_page_num;
 
   static const std::size_t node_type_size = sizeof(node_type);
   static const std::size_t is_root_size = sizeof(is_root);
-  static const std::size_t parent_pointer_size = sizeof(parent);
-  static const std::size_t size = node_type_size + is_root_size + parent_pointer_size;
+  static const std::size_t parent_page_num_size = sizeof(parent_page_num);
+  static const std::size_t size = node_type_size + is_root_size + parent_page_num_size;
 
   CommonHeader();
   explicit CommonHeader(const Page &page);
@@ -156,12 +158,12 @@ struct LeafCell {
 
   static const std::size_t key_size = sizeof(key);
   static const std::size_t value_size = Row::row_size;
-  static const std::size_t cell_size = key_size + value_size;
+  static const std::size_t size = key_size + value_size;
 };
 
 struct LeafBody {
   static const std::size_t space_for_cells = Page::PAGE_SIZE - LeafHeader::size;
-  static const std::size_t max_cells = space_for_cells / LeafCell::cell_size;
+  static const std::size_t max_cells = space_for_cells / LeafCell::size;
 
   std::array<LeafCell, max_cells> cells;
 
@@ -169,55 +171,72 @@ struct LeafBody {
   explicit LeafBody(const Page &page, std::size_t num_cells);
 };
 
+void indent(std::ostream &out, uint32_t level);
+
 struct LeafNode {
   LeafHeader header;
   LeafBody body;
 
-  friend std::ostream &operator<<(std::ostream &out, const LeafNode &s) {
-    out << "leaf (size " << s.header.num_cells << ")\n";
-    for (auto i = 0U; i < s.header.num_cells; ++i) {
-      out << "  - " << i << " : " << s.body.cells[i].key << '\n';
-    }
-    return out;
-  };
+  static const std::size_t right_split_count = (LeafBody::max_cells + 1) / 2;
+  static const std::size_t left_split_count = LeafBody::max_cells + 1 - right_split_count;
 
   LeafNode();
   explicit LeafNode(const Page &page);
 
   void serialize(char *destination);
 
-  void push_back(uint32_t key, const Row &row);
-
   void insert(Table::Cursor cursor, uint32_t key, const Row &row);
 
+  void split_and_insert(Table::Cursor cursor, uint32_t key, const Row &value);
+
   std::size_t find(uint32_t key);
+
+  uint32_t max_key() const;
 };
 
-// Leaf node body layout
-const uint32_t LEAF_NODE_KEY_SIZE = sizeof(uint32_t);
-const uint32_t LEAF_NODE_KEY_OFFSET = 0;
-const uint32_t LEAF_NODE_VALUE_SIZE = ROW_SIZE;
-const uint32_t LEAF_NODE_VALUE_OFFSET = LEAF_NODE_KEY_OFFSET + LEAF_NODE_KEY_SIZE;
-const uint32_t LEAF_NODE_CELL_SIZE = LEAF_NODE_KEY_SIZE + LEAF_NODE_VALUE_SIZE;
-const uint32_t LEAF_NODE_SPACE_FOR_CELLS = PAGE_SIZE - LEAF_NODE_HEADER_SIZE;
-const uint32_t LEAF_NODE_MAX_CELLS = LEAF_NODE_SPACE_FOR_CELLS / LEAF_NODE_CELL_SIZE;
-const uint32_t LEAF_NODE_RIGHT_SPLIT_COUNT = (LEAF_NODE_MAX_CELLS + 1) / 2;
-const uint32_t LEAF_NODE_LEFT_SPLIT_COUNT = LEAF_NODE_MAX_CELLS + 1 - LEAF_NODE_RIGHT_SPLIT_COUNT;
+struct InternalHeader {
+  CommonHeader common_header;
+  uint32_t num_keys;
+  uint32_t right_child_page_num;
 
-// Internal node header layout
-const uint32_t INTERNAL_NODE_NUM_KEYS_SIZE = sizeof(uint32_t);
-const uint32_t INTERNAL_NODE_NUM_KEYS_OFFSET = COMMON_NODE_HEADER_SIZE;
-const uint32_t INTERNAL_NODE_RIGHT_CHILD_SIZE = sizeof(uint32_t);
-const uint32_t INTERNAL_NODE_RIGHT_CHILD_OFFSET = INTERNAL_NODE_NUM_KEYS_OFFSET + INTERNAL_NODE_NUM_KEYS_SIZE;
-const uint32_t INTERNAL_NODE_HEADER_SIZE = COMMON_NODE_HEADER_SIZE +
-    INTERNAL_NODE_NUM_KEYS_SIZE + INTERNAL_NODE_RIGHT_CHILD_SIZE;
+  static const std::size_t num_keys_size = sizeof(num_keys);
+  static const std::size_t right_child_page_num_size = sizeof(right_child_page_num);
+  static const std::size_t size = CommonHeader::size + num_keys_size + right_child_page_num_size;
 
-// Internal node body layout
-const uint32_t INTERNAL_NODE_KEY_SIZE = sizeof(uint32_t);
-const uint32_t INTERNAL_NODE_CHILD_SIZE = sizeof(uint32_t);
-const uint32_t INTERNAL_NODE_CELL_SIZE = INTERNAL_NODE_CHILD_SIZE + INTERNAL_NODE_KEY_SIZE;
+  InternalHeader();
+  explicit InternalHeader(const Page &page);
+};
 
-void leaf_node_split_and_insert(Cursor, uint32_t key, const Row &value);
+struct InternalCell {
+  uint32_t key;
+  uint32_t child_page_num;
+
+  static const std::size_t key_size = sizeof(key);
+  static const std::size_t child_page_num_size = sizeof(child_page_num);
+  static const std::size_t size = key_size + child_page_num_size;
+};
+
+struct InternalBody {
+  static const std::size_t space_for_cells = Page::PAGE_SIZE - InternalHeader::size;
+  static const std::size_t max_cells = space_for_cells / InternalCell::size;
+
+  std::array<InternalCell, max_cells> cells;
+
+  InternalBody();
+  explicit InternalBody(const Page &page, std::size_t num_cells);
+};
+
+struct InternalNode {
+  InternalHeader header;
+  InternalBody body;
+
+  InternalNode();
+  explicit InternalNode(const Page &page);
+
+  void serialize(char *dest);
+
+  uint32_t max_key() const;
+};
 
 void print_constants();
 
