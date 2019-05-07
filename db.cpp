@@ -225,6 +225,40 @@ uint32_t InternalNode::max_key() const {
   return body.cells[header.num_keys - 1].key;
 }
 
+Table::Cursor InternalNode::find(Table &table, uint32_t page_num, uint32_t key) {
+  auto page = table.pager.get_page(page_num);
+  auto node = InternalNode{page};
+  auto num_keys = node.header.num_keys;
+
+  auto min_index = 0;
+  auto max_index = num_keys;
+
+  while(min_index != max_index) {
+    auto index = (min_index + max_index) / 2;
+    auto key_to_right = node.body.cells[index].key;
+    if(key_to_right >= key) {
+      max_index = index;
+    } else {
+      min_index = index + 1;
+    }
+  }
+
+  uint32_t child_page_num;
+  if(min_index == num_keys) {
+    child_page_num = node.header.right_child_page_num;
+  } else {
+    child_page_num = node.body.cells[min_index].child_page_num;
+  }
+
+  auto child_page = table.pager.get_page(child_page_num);
+  switch(CommonHeader{child_page}.node_type) {
+    case CommonHeader::NodeType::LEAF:
+      return Table::Cursor{table, child_page_num, LeafNode{child_page}.find(key)};
+    case CommonHeader::NodeType::INTERNAL:
+      return InternalNode{child_page}.find(table, child_page_num, key);
+  }
+}
+
 Pager::Pager(const std::string &filename)
     : file(filename, std::ios::in | std::ios::out | std::ios::app | std::ios::binary),
       file_length(),
@@ -379,8 +413,7 @@ Table::Cursor Table::find(uint32_t key) {
   if (CommonHeader{root_node}.node_type == CommonHeader::NodeType::LEAF) {
     return Cursor{*this, root_page_num, LeafNode{root_node}.find(key)};
   } else {
-    std::cerr << "Need to implement searching an internal node.\n";
-    exit(EXIT_FAILURE);
+    return InternalNode{root_node}.find(*this, (uint32_t) root_page_num, key);
   }
 }
 
@@ -480,7 +513,8 @@ ExecuteResult execute_insert(const Statement &statement, Table &table) {
   const Row &row_to_insert = statement.row_to_insert;
   auto key_to_insert = row_to_insert.id;
   auto cursor = table.find(key_to_insert);
-  auto node = LeafNode{page};
+  
+  auto node = LeafNode{cursor.page()};
   if (cursor.cell_num < node.header.num_cells) {
     auto key_at_index = node.body.cells[cursor.cell_num].key;
     if (key_at_index == key_to_insert) {
@@ -495,9 +529,11 @@ ExecuteResult execute_insert(const Statement &statement, Table &table) {
 ExecuteResult execute_select(const Statement &statement, Table &table, std::vector<Row> &out_vec) {
   for (auto i = 0U; i < table.pager.num_pages; ++i) {
     auto &page = table.pager.get_page(i);
-    auto node = LeafNode{page};
-    for (auto j = 0U; j < node.header.num_cells; ++j) {
-      out_vec.emplace_back(node.body.cells[j].value);
+    if(CommonHeader{page}.node_type == CommonHeader::NodeType::LEAF) {
+      auto node = LeafNode{page};
+      for (auto j = 0U; j < node.header.num_cells; ++j) {
+        out_vec.emplace_back(node.body.cells[j].value);
+      }
     }
   }
 

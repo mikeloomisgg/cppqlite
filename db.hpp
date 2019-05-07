@@ -236,6 +236,8 @@ struct InternalNode {
   void serialize(char *dest);
 
   uint32_t max_key() const;
+
+  Table::Cursor find(Table &table, uint32_t page_num, uint32_t key);
 };
 
 void print_constants();
